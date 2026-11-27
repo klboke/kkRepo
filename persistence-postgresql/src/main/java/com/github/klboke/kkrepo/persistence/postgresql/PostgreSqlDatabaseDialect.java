@@ -401,6 +401,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractJson(String column, String... path) {
+      return column(column) + " #> '" + path(path) + "'";
+    }
+
+    @Override
     public String extractText(String column, String... path) {
       return column(column) + " #>> '" + path(path) + "'";
     }
@@ -429,6 +434,17 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
           SELECT CAST(value AS BIGINT) AS %s
           FROM jsonb_array_elements_text(CAST(? AS jsonb)) AS scope(value)
           """.formatted(alias);
+    }
+
+    @Override
+    public String textArrayContainsIgnoreCase(String arrayColumn, String valueExpression) {
+      return """
+          EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(CAST(%s AS jsonb)) AS array_element(element_text)
+            WHERE LOWER(array_element.element_text) = LOWER(%s)
+          )
+          """.formatted(arrayColumn, valueExpression);
     }
 
     private static String column(String value) {

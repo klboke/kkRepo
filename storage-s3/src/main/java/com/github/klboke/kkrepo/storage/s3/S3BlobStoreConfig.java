@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.storage.s3;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -138,6 +140,34 @@ public record S3BlobStoreConfig(
         + secretKey + "|" + pathStyleAccess + "|" + maxConnections + "|" + connectionTimeoutMs
         + "|" + socketTimeoutMs + "|" + connectionAcquisitionTimeoutMs + "|" + tcpKeepAlive
         + "|" + multipartThresholdBytes + "|" + multipartPartSizeBytes + "|" + multipartConcurrency;
+  }
+
+  /**
+   * Names of the settings that differ from {@code other}, for diagnostics. Credentials are reported
+   * as {@code credentials} and never by value.
+   */
+  public List<String> differingFields(S3BlobStoreConfig other) {
+    List<String> fields = new ArrayList<>();
+    if (!Objects.equals(engine, other.engine)) fields.add("engine");
+    if (!Objects.equals(endpoint, other.endpoint)) fields.add("endpoint");
+    if (!Objects.equals(region, other.region)) fields.add("region");
+    if (!Objects.equals(bucket, other.bucket)) fields.add("bucket");
+    if (!Objects.equals(prefix, other.prefix)) fields.add("prefix");
+    if (!Objects.equals(accessKey, other.accessKey) || !Objects.equals(secretKey, other.secretKey)) {
+      fields.add("credentials");
+    }
+    if (pathStyleAccess != other.pathStyleAccess) fields.add("pathStyleAccess");
+    if (maxConnections != other.maxConnections) fields.add("maxConnections");
+    if (connectionTimeoutMs != other.connectionTimeoutMs) fields.add("connectionTimeoutMs");
+    if (socketTimeoutMs != other.socketTimeoutMs) fields.add("socketTimeoutMs");
+    if (connectionAcquisitionTimeoutMs != other.connectionAcquisitionTimeoutMs) {
+      fields.add("connectionAcquisitionTimeoutMs");
+    }
+    if (tcpKeepAlive != other.tcpKeepAlive) fields.add("tcpKeepAlive");
+    if (multipartThresholdBytes != other.multipartThresholdBytes) fields.add("multipartThresholdBytes");
+    if (multipartPartSizeBytes != other.multipartPartSizeBytes) fields.add("multipartPartSizeBytes");
+    if (multipartConcurrency != other.multipartConcurrency) fields.add("multipartConcurrency");
+    return List.copyOf(fields);
   }
 
   public Engine engineType() {

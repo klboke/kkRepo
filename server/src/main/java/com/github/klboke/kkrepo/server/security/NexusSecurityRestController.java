@@ -468,7 +468,8 @@ public class NexusSecurityRestController {
             toList(command.scopes()),
             command.expiresAt(),
             command.encryptedPayload(),
-            command.apiKeyHash()));
+            command.apiKeyHash()),
+        subject.apiKeyId() != null);
     return new NexusCreatedApiKey(toNexusApiKey(created.apiKey()), created.token());
   }
 
@@ -486,7 +487,8 @@ public class NexusSecurityRestController {
       HttpServletRequest request,
       @PathVariable("id") long id) {
     AuthenticatedSubject subject = currentSubject(request);
-    CreatedApiKeyView reset = securityService.resetApiKeyForOwner(id, subject.source(), subject.userId());
+    CreatedApiKeyView reset = securityService.resetApiKeyForOwner(
+        id, subject.source(), subject.userId(), subject.apiKeyId() != null);
     return new NexusCreatedApiKey(toNexusApiKey(reset.apiKey()), reset.token());
   }
 

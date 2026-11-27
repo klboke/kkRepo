@@ -4,10 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.DockerConnectorRepository;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -58,11 +57,9 @@ class DockerConnectorManagerTest {
 
   @Test
   void httpsIsAnIndependentDesiredListenerAndOnlyAppliedBindingsRouteTraffic() {
-    var existing = repository(1L, "docker-hosted", true, 5000);
-    var record = new RepositoryRecord(existing.id(), existing.name(), existing.format(), existing.type(),
-        existing.recipeName(), existing.online(), existing.blobStoreId(), null, null, null, null, "ALLOW", true,
-        Map.of("docker", Map.of("connectorPort", 5000, "httpsConnectorPort", 5443,
-            "tlsBundle", " registry ", "connectorPublicUrl", "https://registry.example")));
+    var record = new DockerConnectorRepository(1L, "docker-hosted", RepositoryType.HOSTED,
+        Map.of("connectorPort", 5000, "httpsConnectorPort", 5443,
+            "tlsBundle", " registry ", "connectorPublicUrl", "https://registry.example"));
     var manager = manager(true, List.of(record));
     assertEquals(Map.of(5000, "docker-hosted", 5443, "docker-hosted"), manager.snapshot().repositoriesByPort());
     assertEquals("https", manager.snapshot().connectors().get(1).scheme());
@@ -73,29 +70,14 @@ class DockerConnectorManagerTest {
     assertFalse(manager.snapshot().connectors().get(1).active());
   }
 
-  private static DockerConnectorManager manager(boolean globallyEnabled, List<RepositoryRecord> repositories) {
+  private static DockerConnectorManager manager(boolean globallyEnabled, List<DockerConnectorRepository> repositories) {
     RepositoryDao repositoryDao = mock(RepositoryDao.class);
-    when(repositoryDao.list()).thenReturn(repositories);
+    when(repositoryDao.listDockerConnectorRepositories()).thenReturn(repositories);
     return new DockerConnectorManager(repositoryDao, globallyEnabled, 2000, 100, 60000, 0, 0);
   }
 
-  private static RepositoryRecord repository(long id, String name, boolean connectorEnabled, int connectorPort) {
-    return new RepositoryRecord(
-        id,
-        name,
-        RepositoryFormat.DOCKER,
-        RepositoryType.HOSTED,
-        "docker-hosted",
-        true,
-        1L,
-        null,
-        null,
-        null,
-        null,
-        "ALLOW",
-        true,
-        Map.of("docker", Map.of(
-            "connectorEnabled", connectorEnabled,
-            "connectorPort", connectorPort)));
+  private static DockerConnectorRepository repository(long id, String name, boolean connectorEnabled, int connectorPort) {
+    return new DockerConnectorRepository(id, name, RepositoryType.HOSTED,
+        Map.of("connectorEnabled", connectorEnabled, "connectorPort", connectorPort));
   }
 }

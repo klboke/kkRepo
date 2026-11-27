@@ -387,6 +387,43 @@ public interface SecurityScanDao {
       int maxItems,
       boolean currentOnly);
 
+  /**
+   * Lists findings, in ID order, that keep at least one visible run-subject association
+   * satisfying every filter in {@code query}. Artifact and waiver filters are evaluated per
+   * association, so a finding remains while one matching, unwaived association remains.
+   */
+  List<ScanFinding> listFindings(FindingQuery query, long afterId, int maxItems);
+
+  /**
+   * Aggregates the qualifying (finding, run subject) associations of {@code query} into groups,
+   * ordered by highest severity descending and then by group key ascending. {@code after} is the
+   * cursor of the last group of the previous page, or null for the first page.
+   */
+  List<FindingGroup> listFindingGroups(
+      FindingQuery query, FindingGroupBy groupBy, FindingGroupCursor after, int maxItems);
+
+  /**
+   * Lists the distinct repository contexts and package URLs of the qualifying associations of
+   * {@code query}, ordered by repository and package URL and starting after {@code after} when
+   * it is not null. An empty package URL means the scanner reported the package without one.
+   */
+  List<FindingPackageScope> listFindingPackageScopes(
+      FindingQuery query, FindingPackageScope after, int maxItems);
+
+  /**
+   * Lists waivers, active or expired, tied to one of {@code packageUrls} through their package
+   * selector or through a finding of that package version. A non-null {@code repositoryId}
+   * keeps only waivers scoped to that repository context. Waivers are ordered by ID and start
+   * after {@code afterId}, so callers can read every page.
+   */
+  List<ScanWaiver> listPackageWaivers(
+      String packageName,
+      String installedVersion,
+      List<String> packageUrls,
+      Long repositoryId,
+      long afterId,
+      int maxItems);
+
   Optional<AssetSecurityState> findAssetState(long assetId, long profileId);
 
   /**
@@ -885,6 +922,87 @@ public interface SecurityScanDao {
 
   /** A null sourceRepositoryId means the asset no longer exists. */
   record ScanRunSubjectAsset(ScanRunSubject subject, Long sourceRepositoryId) {}
+
+  /**
+   * Dimensions of the management findings tree. Artifacts are identified by component
+   * coordinates, then by Docker image name and manifest digest, then by asset path.
+   */
+  enum FindingGroupBy {
+    /** Vulnerable package name and installed version reported by the scanner. */
+    PACKAGE,
+    /** Artifact format, namespace, and name, across all artifact versions. */
+    ARTIFACT,
+    /** Artifact format, namespace, name, and version. */
+    ARTIFACT_VERSION
+  }
+
+  /**
+   * Authorization-scoped finding filters. {@code repositoryIds} is the caller's visible
+   * repository scope; an empty scope matches nothing. Every other null filter is unrestricted.
+   * Package and artifact filters compare normalized group keys, where a missing value is the
+   * empty string. A non-null {@code unwaivedAt} excludes associations covered by an approved
+   * waiver that is active at that instant, using the same rules as policy evaluation.
+   */
+  record FindingQuery(
+      List<Long> repositoryIds,
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      boolean currentOnly,
+      Instant unwaivedAt,
+      String packageName,
+      String installedVersion,
+      String artifactFormat,
+      String artifactNamespace,
+      String artifactName,
+      String artifactVersion) {
+    public FindingQuery {
+      repositoryIds = repositoryIds == null ? List.of() : List.copyOf(repositoryIds);
+    }
+  }
+
+  /**
+   * One aggregated findings group. Key fields outside the requested grouping are null; present
+   * key fields are normalized so a missing value is the empty string. Counts are distinct
+   * findings, advisories, and assets across the group's qualifying associations.
+   */
+  record FindingGroup(
+      String packageName,
+      String installedVersion,
+      String artifactFormat,
+      String artifactNamespace,
+      String artifactName,
+      String artifactVersion,
+      Severity maxSeverity,
+      long findingCount,
+      long advisoryCount,
+      long artifactCount,
+      long criticalCount,
+      long highCount,
+      long mediumCount,
+      long lowCount,
+      long otherCount) {
+    /** Keyset position of this group within {@code groupBy} ordering. */
+    public FindingGroupCursor cursor(FindingGroupBy groupBy) {
+      return new FindingGroupCursor(maxSeverity.rank(), switch (groupBy) {
+        case PACKAGE -> List.of(packageName, installedVersion);
+        case ARTIFACT -> List.of(artifactFormat, artifactNamespace, artifactName);
+        case ARTIFACT_VERSION ->
+            List.of(artifactFormat, artifactNamespace, artifactName, artifactVersion);
+      });
+    }
+  }
+
+  /** One repository context in which a package URL was reported; the URL may be empty. */
+  record FindingPackageScope(long repositoryId, String packageUrl) {}
+
+  /** Keyset position after a group: its highest severity rank and its normalized key. */
+  record FindingGroupCursor(int severityRank, List<String> key) {
+    public FindingGroupCursor {
+      key = key == null ? List.of() : List.copyOf(key);
+    }
+  }
 
   record ScanFinding(
       Long id,

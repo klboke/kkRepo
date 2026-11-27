@@ -235,12 +235,16 @@ Before upgrading:
 - For Terraform, upload a hosted module/provider and run Terraform 0.13 plus the current stable `terraform init` through a group; verify the proxied provider, SHA256SUMS, detached signature, lock file, and URL-token redaction in diagnostics.
 - For Ansible, build and publish a collection with Ansible 2.9 and current ansible-core, then install its dependency through a group; verify duplicate-version rejection, proxy install, artifact SHA-256, import-task recovery, and reads through another replica.
 
+When upgrading from 1.4.0, stop all 1.4.0 replicas before starting the new version. Startup re-encrypts affected repository proxy credentials with the currently configured `kkrepo.security.encryption.credential-secret`. Older replicas can still use the old key for those same records.
+
 Recommended rollout:
 
 1. Deploy one new replica.
 2. Verify health, admin UI, browse UI, and key repositories.
 3. Roll through remaining replicas.
 4. Keep the previous artifact/image available for rollback.
+
+CLI user tokens: start issuing them (Browse > **My Token**, `UserToken` domain) only after every replica runs a version that supports them. A replica on an older version does not restrict a user token to HTTP Basic, and it ignores the key generation that makes a reset revoke Docker and Conan bearer tokens on every replica. The same applies after a rollback: delete existing user tokens before or right after you roll back.
 
 If database migrations have run, rollback may require database restore rather than only redeploying the old image. See [Database Backends](database-backends.md) for backend-specific recovery commands.
 

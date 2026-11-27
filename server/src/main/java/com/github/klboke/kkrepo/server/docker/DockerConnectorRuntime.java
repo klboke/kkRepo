@@ -82,10 +82,17 @@ public class DockerConnectorRuntime implements ApplicationListener<ApplicationRe
     } catch (RuntimeException e) {
       lastError = "Cannot read committed Docker connector configuration";
       log.warn(lastError, e);
-      return snapshot();
+      if (runtimeSnapshot == null) {
+        runtimeSnapshot = connectorManager.emptySnapshot();
+      }
+      return runtimeSnapshot;
     }
     TomcatWebServer server = webServer;
-    if (server == null) return desired;
+    if (server == null) {
+      lastError = null;
+      runtimeSnapshot = desired;
+      return desired;
+    }
     org.apache.catalina.Service service = server.getTomcat().getService();
     Map<Integer, DockerConnectorManager.ConnectorStatus> wanted = new LinkedHashMap<>();
     for (var status : desired.connectors()) {

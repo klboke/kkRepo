@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-verification-status">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261123-offload-store-columns">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -1654,6 +1654,22 @@
           </form>
             </div>
           </div>
+          <div class="form-modal" id="security-api-key-result-modal" data-form-id="security-api-key-result" role="dialog" aria-modal="true" aria-labelledby="security-api-key-result-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-result"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <div class="blobstore-form modal-form" id="security-api-key-result" hidden>
+                <label class="form-title" id="security-api-key-result-title" for="security-api-key-value">Generated token</label>
+                <div class="form-grid">
+                  <input class="full-width" id="security-api-key-value" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="security-api-key-result-note">
+                </div>
+                <p class="form-note" id="security-api-key-result-note">Shown once after generate or reset.</p>
+                <div class="form-actions">
+                  <button class="create-button" id="copy-security-api-key" type="button">Copy</button>
+                  <button class="create-button secondary" data-modal-dismiss="security-api-key-result" type="button">Close</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="nx-table-frame">
             <table class="nx-table">
               <thead><tr><th>Domain</th><th>Owner</th><th>Status</th><th>Prefix</th><th class="actions-column">Actions</th></tr></thead>
@@ -1718,6 +1734,45 @@
                 <div class="form-actions">
                   <button class="create-button" id="security-scan-save-waiver-button" data-scan-permission="nexus:security-scanning-waivers:create" hidden type="submit">Create waiver</button>
                   <button class="create-button secondary" id="security-scan-cancel-waiver-button" type="button">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div class="form-modal" id="security-scan-package-waiver-form-modal" data-form-id="security-scan-package-waiver-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-package-waiver-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-scan-package-waiver-form"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <button class="form-modal-close" data-modal-dismiss="security-scan-package-waiver-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form security-scan-form" id="security-scan-package-waiver-form" hidden novalidate>
+                <div class="form-title" id="security-scan-package-waiver-form-title">Waive package</div>
+                <p class="form-note security-scan-form-intro">Waive every advisory of this exact package version in the selected scope, for every artifact including future builds. Existing waivers for this package in that scope are replaced.</p>
+                <div class="form-grid security-scan-waiver-grid">
+                  <label><span>Package</span><input id="security-scan-package-waiver-package" type="text" disabled></label>
+                  <label>
+                    <span>Scope <span class="required-mark">*</span></span>
+                    <select id="security-scan-package-waiver-scope" required></select>
+                  </label>
+                  <div class="full-width security-scan-package-waiver-urls">
+                    <span>Package URL</span>
+                    <div id="security-scan-package-waiver-urls"></div>
+                    <small class="form-note" id="security-scan-package-waiver-url-note" hidden>Some findings of this package have no package URL; waive those one by one.</small>
+                  </div>
+                  <label>
+                    <span>Expires in <span class="required-mark">*</span></span>
+                    <select id="security-scan-package-waiver-duration" required>
+                      <option value="86400">1 day</option>
+                      <option value="604800">7 days</option>
+                      <option value="2592000">30 days</option>
+                      <option value="7776000" selected>90 days</option>
+                      <option value="never">Never expires</option>
+                    </select>
+                  </label>
+                  <label class="full-width"><span>Reason <span class="required-mark">*</span></span><textarea id="security-scan-package-waiver-reason" rows="2" required></textarea></label>
+                  <div class="full-width security-scan-package-waiver-replaced" id="security-scan-package-waiver-replaced"></div>
+                </div>
+                <div class="form-actions">
+                  <button class="create-button" id="security-scan-save-package-waiver-button" data-scan-permission="nexus:security-scanning-waivers:create" hidden type="submit">Waive package</button>
+                  <button class="create-button secondary" id="security-scan-cancel-package-waiver-button" type="button">Cancel</button>
                 </div>
               </form>
             </div>
@@ -1809,9 +1864,21 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="findings" type="button">Clear</button>
-              <label class="security-scan-current-filter" title="Only findings from scans applicable to current artifact content. Uncheck to include historical findings.">
-                <input id="security-scan-current-findings" type="checkbox" checked>
+              <label class="security-scan-current-filter security-scan-switch" title="Only findings from scans applicable to current artifact content. Uncheck to include historical findings.">
+                <input id="security-scan-current-findings" type="checkbox" role="switch" checked>
                 <span>Current findings</span>
+              </label>
+              <label class="security-scan-current-filter security-scan-switch" title="Hide findings whose affected artifacts are all covered by active waivers.">
+                <input id="security-scan-hide-waived" type="checkbox" role="switch">
+                <span>Hide waived</span>
+              </label>
+              <label class="security-scan-current-filter security-scan-switch" title="Group findings by vulnerable package and installed version.">
+                <input id="security-scan-group-package" type="checkbox" role="switch">
+                <span>Group by package</span>
+              </label>
+              <label class="security-scan-current-filter security-scan-switch" title="Group findings by artifact, then by artifact version, or by package when package grouping is also on.">
+                <input id="security-scan-group-artifact" type="checkbox" role="switch">
+                <span>Group by artifact</span>
               </label>
             </form>
             <div class="nx-table-frame">
@@ -2589,6 +2656,6 @@
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
     <script src="./assets/download-offload.js?v=20261122-offload-verification-failure"></script>
-    <script src="./assets/admin.js?v=20261122-download-offload"></script>
+    <script src="./assets/admin.js?v=20261127-api-key-result"></script>
   </body>
 </html>

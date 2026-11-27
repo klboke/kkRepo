@@ -182,6 +182,17 @@ R_APP_OLD_ARCHIVE=""
 R_APP_ARCHIVE=""
 R_APP_SHA256=""
 R_APP_MESSAGE="kkRepo R migration application $TAG_SAFE_LC"
+NUGET_MIGRATION_ENABLED="${NUGET_MIGRATION_ENABLED:-false}"
+NUGET_NEXUS_REPOSITORY="${NUGET_MIGRATION_NEXUS_REPOSITORY:-nuget-migration-hosted}"
+NUGET_KKREPO_REPOSITORY="${NUGET_MIGRATION_KKREPO_REPOSITORY:-nuget-migration-hosted}"
+NUGET_PACKAGE="${NUGET_MIGRATION_PACKAGE:-KkRepo.Migration.NuGet.${R_TAG_ALNUM}}"
+NUGET_PUBLISHER_USER="${NUGET_MIGRATION_PUBLISHER_USER:-nuget-publisher}"
+NUGET_READER_USER="${NUGET_MIGRATION_READER_USER:-nuget-reader}"
+# Disposable fixture credentials for local Nexus users created by this harness only.
+NUGET_USER_PASSWORD="${NUGET_MIGRATION_USER_PASSWORD:-NuGetMigration-1234}"
+NUGET_FIXTURE_WORKDIR=""
+NUGET_PUBLISHER_API_KEY=""
+NUGET_READER_API_KEY=""
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -355,6 +366,9 @@ cleanup() {
   fi
   if [[ -n "$R_FIXTURE_WORKDIR" ]]; then
     rm -rf "$R_FIXTURE_WORKDIR"
+  fi
+  if [[ -n "$NUGET_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$NUGET_FIXTURE_WORKDIR"
   fi
   if [[ "$R_MIGRATION_ENABLED" == "true" ]]; then
     docker rm -f "$R_MIGRATION_UPSTREAM_CONTAINER" >/dev/null 2>&1 || true
@@ -542,6 +556,10 @@ alpine_migration_enabled() {
 
 r_migration_enabled() {
   [[ "$R_MIGRATION_ENABLED" == "true" ]]
+}
+
+nuget_migration_enabled() {
+  [[ "$NUGET_MIGRATION_ENABLED" == "true" ]]
 }
 
 source_apt_available() {
@@ -5507,6 +5525,221 @@ PY
   rm -f "$preflight_file" "$run_file" "$repo_file"
 }
 
+json_string_field() {
+  python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"
+}
+
+ensure_nuget_source_realm() {
+  local realms
+  realms="$(curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/security/realms/active")"
+  realms="$(python3 -c '
+import json, sys
+realms = json.loads(sys.argv[1])
+if "NuGetApiKey" not in realms:
+    realms.append("NuGetApiKey")
+print(json.dumps(realms))
+' "$realms")"
+  curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" -X PUT \
+    -H "Content-Type: application/json" --data "$realms" \
+    "$NEXUS_URL/service/rest/v1/security/realms/active" >/dev/null
+  log "source Nexus active realms include NuGetApiKey"
+}
+
+ensure_nuget_source_repository() {
+  local status
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/nuget/hosted/$NUGET_NEXUS_REPOSITORY")"
+  if [[ "$status" == "200" ]]; then
+    return 0
+  fi
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" -X POST \
+    -H "Content-Type: application/json" \
+    --data "{\"name\":\"$(json_escape "$NUGET_NEXUS_REPOSITORY")\",\"online\":true,\"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true,\"writePolicy\":\"allow_once\"}}" \
+    "$NEXUS_URL/service/rest/v1/repositories/nuget/hosted" >/dev/null
+  log "created source Nexus NuGet hosted repository $NUGET_NEXUS_REPOSITORY"
+}
+
+ensure_nuget_source_user() {
+  local user="$1"
+  local role="$2"
+  local privileges_json="$3"
+  local status
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/security/roles/$role")"
+  if [[ "$status" != "200" ]]; then
+    curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" -X POST \
+      -H "Content-Type: application/json" \
+      --data "{\"id\":\"$role\",\"name\":\"$role\",\"description\":\"kkRepo NuGet migration E2E\",\"privileges\":$privileges_json,\"roles\":[]}" \
+      "$NEXUS_URL/service/rest/v1/security/roles" >/dev/null
+  fi
+  if ! curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+      "$NEXUS_URL/service/rest/v1/security/users?source=default&userId=$user" \
+      | grep -Eq "\"userId\"[[:space:]]*:[[:space:]]*\"$user\""; then
+    curl -m 20 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" -X POST \
+      -H "Content-Type: application/json" \
+      --data "{\"userId\":\"$user\",\"firstName\":\"NuGet\",\"lastName\":\"Migration\",\"emailAddress\":\"$user@example.invalid\",\"password\":\"$(json_escape "$NUGET_USER_PASSWORD")\",\"status\":\"active\",\"roles\":[\"$role\"]}" \
+      "$NEXUS_URL/service/rest/v1/security/users" >/dev/null
+  fi
+  log "source Nexus user $user has role $role"
+}
+
+# The NuGet API key is issued the way the Nexus CE UI does it: a short-lived UI auth ticket from
+# wonderland/authenticate, then GET internal/nuget-api-key. The key is never logged.
+nexus_nuget_api_key() {
+  local user="$1"
+  local password="$2"
+  local ticket key
+  ticket="$(curl -m 20 -fsS -u "$user:$password" -X POST \
+    -H "X-Nexus-UI: true" -H "Accept: application/json" -H "Content-Type: application/json" \
+    --data "{\"u\":\"$(printf '%s' "$user" | base64 | tr -d '\n')\",\"p\":\"$(printf '%s' "$password" | base64 | tr -d '\n')\"}" \
+    "$NEXUS_URL/service/rest/wonderland/authenticate" | json_string_field t)"
+  key="$(curl -m 20 -fsS -u "$user:$password" -G \
+    -H "X-Nexus-UI: true" -H "Accept: application/json" \
+    --data-urlencode "authToken=$(printf '%s' "$ticket" | base64 | tr -d '\n')" \
+    "$NEXUS_URL/service/rest/internal/nuget-api-key" | json_string_field apiKey)"
+  if [[ -z "$key" ]]; then
+    log "source Nexus did not issue a NuGet API key for $user"
+    exit 1
+  fi
+  printf '%s' "$key"
+}
+
+nuget_fixture_file() {
+  printf '%s/%s.%s.nupkg' "$NUGET_FIXTURE_WORKDIR" "$NUGET_PACKAGE" "$1"
+}
+
+build_nuget_fixture() {
+  python3 - "$(nuget_fixture_file "$1")" "$NUGET_PACKAGE" "$1" <<'PY'
+import sys
+import zipfile
+
+path, package, version = sys.argv[1:4]
+nuspec = f"""<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>{package}</id>
+    <version>{version}</version>
+    <authors>kkrepo</authors>
+    <description>kkRepo NuGet API key migration E2E fixture</description>
+  </metadata>
+</package>
+"""
+with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr(f"{package}.nuspec", nuspec)
+    archive.writestr("content/readme.txt", f"{package} {version}\n")
+PY
+}
+
+# Prints the HTTP status of a NuGet push (multipart PUT, as `dotnet nuget push` sends it).
+push_nuget_fixture() {
+  local base_url="$1"
+  local repository="$2"
+  local api_key="$3"
+  local version="$4"
+  curl -m 60 -sS -o /dev/null -w '%{http_code}' -X PUT \
+    -H "X-NuGet-ApiKey: $api_key" \
+    -F "package=@$(nuget_fixture_file "$version");type=application/octet-stream" \
+    "$base_url/repository/$repository/"
+}
+
+expect_nuget_push_denied() {
+  local status="$1"
+  local action="$2"
+  if [[ "$status" != "401" && "$status" != "403" ]]; then
+    log "$action returned HTTP $status, expected 401 or 403"
+    exit 1
+  fi
+  log "$action denied with HTTP $status"
+}
+
+# Asserts that the v3 PackageBaseAddress advertised in index.json lists the version (and omits an
+# optional unexpected one), and that the listed version downloads byte-identically.
+verify_nuget_version_listed() {
+  local base_url="$1"
+  local repository="$2"
+  local credentials="$3"
+  local label="$4"
+  local version="$5"
+  local absent_version="${6:-}"
+  local content_base id_lower versions_file downloaded
+  content_base="$(curl -m 30 -fsS -u "$credentials" "$base_url/repository/$repository/index.json" \
+    | python3 -c '
+import json, sys
+resources = json.load(sys.stdin)["resources"]
+print(next(r["@id"] for r in resources if r["@type"].startswith("PackageBaseAddress")))
+')"
+  content_base="${content_base%/}"
+  id_lower="$(printf '%s' "$NUGET_PACKAGE" | tr '[:upper:]' '[:lower:]')"
+  versions_file="$NUGET_FIXTURE_WORKDIR/versions.json"
+  downloaded="$NUGET_FIXTURE_WORKDIR/downloaded.nupkg"
+  curl -m 30 -fsS -u "$credentials" "$content_base/$id_lower/index.json" >"$versions_file"
+  python3 - "$versions_file" "$version" "$absent_version" <<'PY'
+import json
+import sys
+
+listed = json.load(open(sys.argv[1], encoding="utf-8"))["versions"]
+if sys.argv[2] not in listed:
+    raise SystemExit(f"NuGet version index {listed} omits {sys.argv[2]}")
+if sys.argv[3] and sys.argv[3] in listed:
+    raise SystemExit(f"NuGet version index {listed} lists rejected version {sys.argv[3]}")
+PY
+  curl -m 60 -fsS -u "$credentials" -o "$downloaded" \
+    "$content_base/$id_lower/$version/$id_lower.$version.nupkg"
+  cmp "$downloaded" "$(nuget_fixture_file "$version")"
+  log "NuGet $NUGET_PACKAGE $version is listed and downloadable on $label"
+}
+
+seed_nuget_source_fixture() {
+  local repo_privilege="nx-repository-view-nuget-$NUGET_NEXUS_REPOSITORY"
+  NUGET_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-nuget-migration.XXXXXX")"
+  ensure_nuget_source_realm
+  ensure_nuget_source_repository
+  ensure_nuget_source_user "$NUGET_PUBLISHER_USER" "nuget-migration-publisher" \
+    "[\"$repo_privilege-*\",\"nx-apikey-all\"]"
+  ensure_nuget_source_user "$NUGET_READER_USER" "nuget-migration-reader" \
+    "[\"$repo_privilege-read\",\"$repo_privilege-browse\",\"nx-apikey-all\"]"
+  NUGET_PUBLISHER_API_KEY="$(nexus_nuget_api_key "$NUGET_PUBLISHER_USER" "$NUGET_USER_PASSWORD")"
+  NUGET_READER_API_KEY="$(nexus_nuget_api_key "$NUGET_READER_USER" "$NUGET_USER_PASSWORD")"
+
+  build_nuget_fixture 1.0.0
+  expect_status \
+    "$(push_nuget_fixture "$NEXUS_URL" "$NUGET_NEXUS_REPOSITORY" "$NUGET_PUBLISHER_API_KEY" 1.0.0)" \
+    201 "source Nexus NuGet push of $NUGET_PACKAGE 1.0.0 with the publisher API key"
+  log "published $NUGET_PACKAGE 1.0.0 to source Nexus with the $NUGET_PUBLISHER_USER NuGet API key"
+  build_nuget_fixture 1.0.1
+  expect_nuget_push_denied \
+    "$(push_nuget_fixture "$NEXUS_URL" "$NUGET_NEXUS_REPOSITORY" "$NUGET_READER_API_KEY" 1.0.1)" \
+    "source Nexus NuGet push with the read-only user's API key"
+  verify_nuget_version_listed "$NEXUS_URL" "$NUGET_NEXUS_REPOSITORY" \
+    "$NEXUS_USER:$NEXUS_PASSWORD" "source Nexus" 1.0.0
+}
+
+verify_nuget_api_key_publishes_after_migration() {
+  local downloaded="$NUGET_FIXTURE_WORKDIR/migrated.nupkg"
+  # shortcut: the migrated 1.0.0 is read through the Nexus asset path <Id>/<Version>, because
+  # kkRepo's v3 version index does not list migrated Nexus NuGet assets yet; switch to
+  # verify_nuget_version_listed once it does.
+  curl -m 60 -fsS -u "$(auth)" -o "$downloaded" \
+    "$KKREPO_URL/repository/$NUGET_KKREPO_REPOSITORY/$NUGET_PACKAGE/1.0.0"
+  cmp "$downloaded" "$(nuget_fixture_file 1.0.0)"
+  log "migrated NuGet $NUGET_PACKAGE 1.0.0 is byte-identical on kkRepo"
+  expect_status \
+    "$(push_nuget_fixture "$KKREPO_URL" "$NUGET_KKREPO_REPOSITORY" "$NUGET_PUBLISHER_API_KEY" 1.0.1)" \
+    201 "kkRepo NuGet push of $NUGET_PACKAGE 1.0.1 with the migrated Nexus API key"
+  log "published $NUGET_PACKAGE 1.0.1 to kkRepo with the same Nexus NuGet API key"
+
+  build_nuget_fixture 1.0.2
+  expect_nuget_push_denied \
+    "$(push_nuget_fixture "$KKREPO_URL" "$NUGET_KKREPO_REPOSITORY" "kkrepo-wrong-nuget-api-key" 1.0.2)" \
+    "kkRepo NuGet push with a wrong API key"
+  expect_nuget_push_denied \
+    "$(push_nuget_fixture "$KKREPO_URL" "$NUGET_KKREPO_REPOSITORY" "$NUGET_READER_API_KEY" 1.0.2)" \
+    "kkRepo NuGet push with the migrated read-only user's API key"
+  verify_nuget_version_listed "$KKREPO_URL" "$NUGET_KKREPO_REPOSITORY" "$(auth)" \
+    "kkRepo" 1.0.1 1.0.2
+}
+
 refresh_kkrepo_password_after_metadata_migration() {
   if curl -m 10 -fsS -u "$KKREPO_USER:$NEXUS_PASSWORD" \
       "$KKREPO_URL/internal/security/session" >/dev/null 2>&1; then
@@ -5651,6 +5884,12 @@ if r_migration_enabled; then
   publish_r_fixture_to_source_nexus
   verify_source_r_fixture
 fi
+if nuget_migration_enabled; then
+  need python3
+  need cmp
+  # Users and their NuGet API keys must exist before the security metadata migration copies them.
+  seed_nuget_source_fixture
+fi
 run_config_metadata_migration
 if go_migration_enabled; then
   verify_go_repository_definition "$KKREPO_URL" "primary"
@@ -5741,6 +5980,9 @@ if alpine_migration_enabled; then
 fi
 if r_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$R_NEXUS_REPOSITORY")\""
+fi
+if nuget_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$NUGET_NEXUS_REPOSITORY")\""
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
@@ -5983,4 +6225,8 @@ if r_migration_enabled; then
   fi
 fi
 
-log "Docker/Go/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine/R migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if nuget_migration_enabled; then
+  verify_nuget_api_key_publishes_after_migration
+fi
+
+log "Docker/Go/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine/R/NuGet migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

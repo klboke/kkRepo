@@ -56,6 +56,7 @@ class NexusSecurityJsonMigrationCliTest {
 
     assertEquals(0, exitCode);
     assertTrue(outBytes.toString().contains("--export /path/to/security-export.json"));
+    assertTrue(outBytes.toString().contains("3  migration incomplete"));
     assertEquals("", errBytes.toString());
   }
 
@@ -97,6 +98,40 @@ class NexusSecurityJsonMigrationCliTest {
   }
 
   @Test
+  void reportsNexusProUserTokensAsNotMigratedWithoutSecrets() throws Exception {
+    String pair = "AliceName1:" + "p".repeat(44);
+    Path export = tempDir.resolve("pro-security-export.json");
+    Files.writeString(export, """
+        {"apiKeys": [
+          {"domain": "NpmToken", "api_key": "npm-secret", "primary_principal": "alice"},
+          {"domain": "User-Token-Realm", "api_key": "%s", "primary_principal": "alice"},
+          {"domain": "User-Token-Realm", "api_key": "BobNameCd2:x", "primary_principal": "bob",
+           "principals": {"primaryPrincipal": "bob", "realmNames": ["LdapRealm"]}}
+        ]}
+        """.formatted(pair));
+    StoresFixture fixture = new StoresFixture();
+    fixture.allowWrites = true;
+    ByteArrayOutputStream outBytes = new ByteArrayOutputStream();
+
+    int exitCode = new NexusSecurityJsonMigrationCli(settings -> fixture.stores())
+        .run(arguments(export), new PrintStream(outBytes), new PrintStream(new ByteArrayOutputStream()));
+
+    // Incomplete: nonzero so automation stops before cutover, with the JSON report still printed.
+    assertEquals(NexusSecurityJsonMigrationCli.EXIT_INCOMPLETE, exitCode);
+    assertTrue(outBytes.toString().contains("\"status\":\"finished_with_validation_failures\""), outBytes.toString());
+    assertEquals(java.util.List.of("NpmToken"), fixture.apiKeyDomains);
+    assertEquals("finished_with_validation_failures", fixture.finishedStatus);
+    NexusUserTokenReport userTokens = (NexusUserTokenReport) fixture.finishedSummary.get("userTokens");
+    assertEquals(2, userTokens.tokens());
+    assertEquals(java.util.List.of("LDAP/bob", "Local/alice"), userTokens.owners());
+    String output = outBytes.toString();
+    assertTrue(output.contains("\"owners\":[\"LDAP/bob\",\"Local/alice\"]"), output);
+    for (String secret : java.util.List.of(pair, "AliceName1", "BobNameCd2")) {
+      assertTrue(!output.contains(secret) && !String.valueOf(fixture.finishedSummary).contains(secret), secret);
+    }
+  }
+
+  @Test
   void marksTheJobFailedWhenTheExportCannotBeRead() {
     StoresFixture fixture = new StoresFixture();
     ByteArrayOutputStream errBytes = new ByteArrayOutputStream();
@@ -127,6 +162,8 @@ class NexusSecurityJsonMigrationCliTest {
     private String finishedStatus;
     private Map<String, Object> finishedSummary;
     private boolean closed;
+    private boolean allowWrites;
+    private final java.util.List<String> apiKeyDomains = new java.util.ArrayList<>();
 
     private final MigrationJobDao migrationJobs = new MigrationJobDao() {
       @Override
@@ -149,6 +186,9 @@ class NexusSecurityJsonMigrationCliTest {
     private final MigrationCheckpointDao migrationCheckpoints = new MigrationCheckpointDao() {
       @Override
       public void upsert(MigrationCheckpointRecord record) {
+        if (allowWrites) {
+          return;
+        }
         throw new AssertionError("empty exports must not write checkpoints");
       }
 
@@ -163,7 +203,13 @@ class NexusSecurityJsonMigrationCliTest {
         SecurityDao.class.getClassLoader(),
         new Class<?>[] {SecurityDao.class},
         (proxy, method, args) -> {
-          throw new AssertionError("empty exports must not call SecurityDao." + method.getName());
+          if (!allowWrites) {
+            throw new AssertionError("empty exports must not call SecurityDao." + method.getName());
+          }
+          if ("upsertApiKey".equals(method.getName())) {
+            apiKeyDomains.add(((com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord) args[0]).domain());
+          }
+          return method.getName().startsWith("find") ? Optional.of(new Object()) : null;
         });
 
     private PersistenceStores stores() {

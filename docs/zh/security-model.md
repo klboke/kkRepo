@@ -35,6 +35,10 @@ kkrepo 安全模型目标：
 
 认证顺序和具体行为取决于请求类型。协议客户端通常使用 Basic auth、API key 或协议原生 token flow。浏览器用户登录后使用 session。
 
+LDAP 和 OIDC 用户的 API key、CLI user token 以及 Docker/Conan bearer token 会带上提供方在用户最近一次登录时验证的外部组。每次使用时，这些组都会按该提供方当前的角色映射和同名匹配设置解析，因此与该用户浏览器 session 的仓库权限一致，映射变更同样会作用于这些凭据（API key 和 user token 的查找结果在每个节点上最多缓存约一分钟）。在目录或 IdP 中移除的组，会在用户下一次通过该提供方登录后失效。密码登录会在 `kkrepo.cache.basic-auth.ttl-seconds` 内使用 Basic 凭据缓存，因此 LDAP 在缓存过期后的首次登录时同步变更，浏览器登录则会立即同步。
+
+kkRepo 无法感知目录或 IdP 中账号被禁用。这类用户不会再登录，因此其 API key、user token 以及 Docker/Conan bearer token 会保留最近一次登录时的外部组。删除其 API key 和 user token 会撤销这些 key 以及由它们签发的 bearer token；但直接通过 LDAP 密码或 OIDC 登录签发的 bearer token 不关联任何 key，在 kkRepo 账号仍处于启用状态时会一直有效，直到过期。完整的离职处理请在 kkRepo 中禁用或删除该用户：这会同时使其所有 key、user token 和已签发的 bearer token 失效。
+
 ## 共享数据库状态
 
 安全状态存储在所选 MySQL 或 PostgreSQL 数据库：
