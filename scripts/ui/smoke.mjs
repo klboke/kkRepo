@@ -101,6 +101,10 @@ try {
   await login(page, username, password, adminRoute);
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
+  const repositoryIcons = await page.locator("#side-group-repository-items .side-item-icon")
+    .evaluateAll(icons => icons.map(icon => getComputedStyle(icon).maskImage));
+  assert.ok(repositoryIcons.length > 0 && !repositoryIcons.includes("none"));
+  assert.equal(new Set(repositoryIcons).size, repositoryIcons.length, "Each repository menu entry has a distinct icon");
   const filter = page.locator("#repository-filter");
   const filterFrame = page.locator(".filter-box").filter({ has: filter });
   await page.locator("#create-repository-button").focus();
