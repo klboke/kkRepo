@@ -11,7 +11,8 @@ export function bindNavigationDisclosure() {
     if (open) (sidebar.querySelector(".side-item.is-active") || sidebar.querySelector("button, a"))?.focus();
   });
   sidebar.addEventListener("click", event => {
-    if (event.target.closest("[data-view], .side-subitem, a[href]") && sidebar.classList.contains("navigation-open")) {
+    const destination = event.target.closest("[data-view]:not([aria-expanded]), .side-subitem, a[href]");
+    if (destination && sidebar.classList.contains("navigation-open")) {
       setOpen(false);
       toggle.focus();
     }

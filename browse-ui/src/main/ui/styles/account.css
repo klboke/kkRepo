@@ -119,10 +119,6 @@
     grid-template-columns: 1fr;
   }
 
-  .search-subnav {
-    display: none;
-  }
-
   .side-item {
     height: 44px;
     font-size: 16px;

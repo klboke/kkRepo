@@ -519,6 +519,21 @@ code,
     overflow-x: auto;
   }
 
+  .search-subnav .side-subitem {
+    width: auto;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 980px) {
+  .search-subnav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .search-subnav .side-subitem {
+    margin-inline-start: 0;
+  }
 }
 
 @media (max-width: 520px) {
