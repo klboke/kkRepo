@@ -882,3 +882,5 @@
     padding-top: 4px;
   }
 }
+
+.security-scan-list-toolbar .form-switch { white-space: nowrap; }

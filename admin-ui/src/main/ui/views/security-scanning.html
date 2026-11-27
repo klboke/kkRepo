@@ -184,19 +184,19 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="findings" type="button">Clear</button>
-              <label class="security-scan-current-filter security-scan-switch" title="Only findings from scans applicable to current artifact content. Uncheck to include historical findings.">
+              <label class="form-switch" title="Only findings from scans applicable to current artifact content. Uncheck to include historical findings.">
                 <input id="security-scan-current-findings" type="checkbox" role="switch" checked>
                 <span>Current findings</span>
               </label>
-              <label class="security-scan-current-filter security-scan-switch" title="Hide findings whose affected artifacts are all covered by active waivers.">
+              <label class="form-switch" title="Hide findings whose affected artifacts are all covered by active waivers.">
                 <input id="security-scan-hide-waived" type="checkbox" role="switch">
                 <span>Hide waived</span>
               </label>
-              <label class="security-scan-current-filter security-scan-switch" title="Group findings by vulnerable package and installed version.">
+              <label class="form-switch" title="Group findings by vulnerable package and installed version.">
                 <input id="security-scan-group-package" type="checkbox" role="switch">
                 <span>Group by package</span>
               </label>
-              <label class="security-scan-current-filter security-scan-switch" title="Group findings by artifact, then by artifact version, or by package when package grouping is also on.">
+              <label class="form-switch" title="Group findings by artifact, then by artifact version, or by package when package grouping is also on.">
                 <input id="security-scan-group-artifact" type="checkbox" role="switch">
                 <span>Group by artifact</span>
               </label>

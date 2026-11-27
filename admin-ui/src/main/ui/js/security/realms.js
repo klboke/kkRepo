@@ -67,8 +67,9 @@ function realmRow(realm, index, activeCount) {
   }
   const activation = realm.realmId === "local"
     ? `<span class="realm-required">${lucideIcon("lock")} <span>Always enabled</span></span>`
-    : `<label class="realm-toggle"><input type="checkbox" aria-labelledby="realm-toggle-${id} ${nameId}"${realm.enabled ? " checked" : ""}${saving ? " disabled" : ""}>
-        <span id="realm-toggle-${id}">${realm.enabled ? "Enabled" : "Disabled"}</span></label>`;
+    : `<label class="form-switch realm-activation"><input type="checkbox" role="switch" id="realm-activation-${id}"
+        aria-labelledby="realm-activation-label-${id} ${nameId}"${realm.enabled ? " checked" : ""}${saving ? " disabled" : ""}>
+        <span id="realm-activation-label-${id}">Use for sign-in</span></label>`;
   return `<li class="realm-row" data-realm-id="${id}">
     ${realm.enabled ? `<span class="realm-rank" aria-hidden="true">${index + 1}</span>` : ""}
     <div class="realm-identity"><strong id="${nameId}" data-i18n-skip>${escapeHtml(realm.name)}</strong><span class="realm-description">${metadata}</span></div>
@@ -81,6 +82,7 @@ function renderRealmEditor(message = "") {
   const enabled = draft.filter(realm => realm.enabled);
   const disabled = draft.filter(realm => !realm.enabled);
   const dirty = realmChanges().length > 0;
+  document.getElementById("realm-announcement").textContent = "";
   document.getElementById("realm-enabled-count").textContent = draft.length ? `${enabled.length} enabled` : "";
   document.getElementById("realm-enabled-list").innerHTML = enabled.map((realm, i) => realmRow(realm, i, enabled.length)).join("");
   document.getElementById("realm-disabled-section").hidden = disabled.length === 0;
@@ -88,7 +90,7 @@ function renderRealmEditor(message = "") {
   document.getElementById("save-security-realms-button").disabled = saving || !dirty;
   document.getElementById("discard-security-realms-button").disabled = saving || !dirty;
   const status = document.getElementById("realm-edit-status");
-  status.textContent = message || (dirty ? "Unsaved changes" : "No changes");
+  status.textContent = message || (dirty ? "Save to apply changes." : "No changes");
   status.classList.toggle("is-dirty", dirty && !saving);
 }
 
@@ -97,7 +99,6 @@ export async function loadSecurityRealms() {
   const load = ++latestLoad;
   resetDraft([]);
   document.getElementById("reload-security-realms-button").hidden = true;
-  document.getElementById("realm-announcement").textContent = "";
   renderRealmEditor("Loading…");
   const realms = await fetchJson(endpoint, null, "Failed to load realms");
   if (load !== latestLoad) return;
@@ -141,7 +142,6 @@ async function saveSecurityRealms() {
     resetDraft(await response.json());
     status = "Realms saved.";
   } catch (error) {
-    status = "Unsaved changes";
     showToast(`Save failed: ${error.message}`, "error");
   } finally {
     saving = false;
@@ -159,13 +159,15 @@ export function bindRealmEditor() {
     if (button && !saving) moveRealm(button, button.closest(".realm-row"));
   });
   editor.addEventListener("change", event => {
-    const input = event.target.closest(".realm-toggle input");
+    const input = event.target.closest(".realm-activation input");
     if (!input || saving) return;
-    const id = input.closest(".realm-row").dataset.realmId;
-    const realm = draft.find(item => item.realmId === id);
+    const row = input.closest(".realm-row");
+    const realm = draft.find(item => item.realmId === row.dataset.realmId);
     realm.enabled = input.checked;
     renderRealmEditor();
-    document.getElementById(`realm-toggle-${id}`).closest("label").querySelector("input").focus();
+    document.getElementById(input.id).focus();
+    const group = realm.enabled ? "Authentication order" : "Disabled realms";
+    document.getElementById("realm-announcement").innerHTML = `<span data-i18n-skip>${escapeHtml(realm.name)}</span> · <span>${group}</span>`;
   });
   document.getElementById("reload-security-realms-button").addEventListener("click", loadSecurityRealms);
   document.getElementById("discard-security-realms-button").addEventListener("click", () => {

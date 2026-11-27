@@ -1,7 +1,7 @@
 .realm-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding-block: 16px 24px; }
 .realm-section-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
 .realm-section-heading h2 { margin: 0; color: var(--ink-1); font-size: 17px; }
-#realm-enabled-count, .realm-description, .realm-toggle, .realm-required, #realm-edit-status {
+#realm-enabled-count, .realm-description, .realm-required, .realm-activation, #realm-edit-status {
   color: var(--ink-3);
   font-size: var(--fs-sm);
 }
@@ -9,7 +9,7 @@
 .realm-list:empty { display: none; }
 .realm-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) minmax(132px, max-content) 78px;
+  grid-template-columns: 32px minmax(0, 1fr) clamp(10rem, 19%, 14rem) 78px;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
@@ -19,9 +19,8 @@
 .realm-identity { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
 .realm-identity strong { color: var(--ink-1); }
 .realm-description { display: block; margin-top: 2px; }
-.realm-required, .realm-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; justify-self: start; }
-.realm-toggle { cursor: pointer; }
-.realm-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); }
+.realm-required { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; }
+.realm-activation { justify-self: start; min-height: 34px; }
 .realm-moves { display: flex; justify-content: flex-end; gap: 5px; }
 .realm-moves .row-action { display: grid; place-items: center; min-width: 34px; min-height: 34px; padding: 4px; }
 .realm-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -33,7 +32,7 @@
   .realm-row { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px; }
   .realm-rank { grid-area: 1 / 1 / 3 / 2; align-self: start; }
   .realm-identity { grid-area: 1 / 2; }
-  .realm-toggle, .realm-required { grid-area: 2 / 2; }
+  .realm-activation, .realm-required { grid-area: 2 / 2; }
   .realm-moves { grid-area: 1 / 3 / 3 / 4; }
   #realm-edit-status { flex-basis: 100%; }
 }

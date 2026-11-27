@@ -77,7 +77,9 @@ async function verifyRealmEditor(page) {
     await expect(active).toHaveText(["Local", "Build directory", "OIDC"]);
     await expect(save).toBeDisabled();
     await expect(view.getByText("build-users")).toBeVisible();
-    await expect(view.locator('[data-realm-id="local"] input')).toHaveCount(0);
+    await expect(view.locator('[data-realm-id="local"]').getByRole("switch")).toHaveCount(0);
+    const oidcSwitch = view.getByRole("switch", { name: "Use for sign-in OIDC", exact: true });
+    await expect(oidcSwitch).toBeChecked();
     const up = view.getByRole("button", { name: "Move up Build directory" });
     await up.press("Enter");
     await expect(active.first()).toHaveText("Build directory");
@@ -86,12 +88,14 @@ async function verifyRealmEditor(page) {
     await expect(active.first()).toHaveText("Local");
     await expect(save).toBeDisabled();
     await up.click();
-    await view.getByRole("checkbox", { name: "Enabled OIDC" }).press("Space");
+    await oidcSwitch.press("Space");
     await expect(view.locator("#realm-disabled-list .realm-identity strong")).toHaveText("OIDC");
-    await expect(view.getByRole("checkbox", { name: "Disabled OIDC" })).toBeFocused();
+    await expect(oidcSwitch).not.toBeChecked();
+    await expect(oidcSwitch).toBeFocused();
+    await expect(view.locator("#realm-announcement")).toHaveText("OIDC · Disabled realms");
     assert.equal(writes.length, 0);
     await save.click();
-    await expect(view.locator("#realm-edit-status")).toHaveText("Unsaved changes");
+    await expect(view.locator("#realm-edit-status")).toHaveText("Save to apply changes.");
     await expect(save).toBeEnabled();
     await save.click();
     await expect(view.locator("#realm-edit-status")).toHaveText("Realms saved.");
@@ -103,9 +107,12 @@ async function verifyRealmEditor(page) {
     await page.reload();
     await expect(active).toHaveText(["Build directory", "Local"]);
     await expect(save).toBeDisabled();
-    await view.getByRole("checkbox", { name: "Disabled OIDC" }).click();
+    await oidcSwitch.click();
     await expect(active).toHaveText(["Build directory", "Local", "OIDC"]);
-    await view.getByRole("checkbox", { name: "Enabled OIDC" }).click();
+    await expect(oidcSwitch).toBeChecked();
+    await expect(oidcSwitch).toBeFocused();
+    await expect(view.locator("#realm-announcement")).toHaveText("OIDC · Authentication order");
+    await oidcSwitch.click();
     await expect(save).toBeDisabled();
 
     fixtures.find(row => row.realmId === "local").priority = 7;
