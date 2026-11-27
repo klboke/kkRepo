@@ -126,10 +126,25 @@ try {
   await verifyControlIcons(page);
   const workspaces = page.locator(".workspace-tabs");
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await workspaces.getByRole("link", { name: "Browse" }).click();
-  await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Browse");
-  await page.waitForLoadState("domcontentloaded");
-  assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), true, "The active underline moves between workspaces");
+  const underline = workspaces.locator(".workspace-marker");
+  const departure = await underline.boundingBox();
+  let releaseBrowse;
+  const bundleGate = new Promise(resolve => { releaseBrowse = resolve; });
+  await page.route("**/browse/assets/browse.js?*", async route => {
+    await bundleGate;
+    await route.continue();
+  }, { times: 1 });
+  try {
+    await workspaces.getByRole("link", { name: "Browse" }).click({ noWaitAfter: true });
+    await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Browse");
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const firstPaint = await underline.boundingBox();
+    assert.ok(Math.abs(firstPaint.x - departure.x) < 1 && Math.abs(firstPaint.width - departure.width) < 1,
+      "The destination keeps the departing underline in place before its application bundle loads");
+  } finally {
+    releaseBrowse();
+  }
+  await expect.poll(() => page.evaluate(() => window.workspaceSwitchAnimated)).toBe(true);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await workspaces.getByRole("link", { name: "Admin" }).press("Enter");
   await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Admin");

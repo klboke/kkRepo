@@ -29,6 +29,7 @@
 }
 .side-nav .side-item:is(:hover,.is-active) :is(.side-icon,.side-caret) { color: inherit; }
 .workspace-tabs {
+  position: relative;
   display: flex;
   align-self: center;
   gap: 2px;
@@ -59,6 +60,11 @@
   border-bottom: 2px solid var(--topbar-active);
   border-radius: 1px;
   transform-origin: left center;
+}
+[data-workspace-origin] .workspace-tab[aria-current] { position: static; }
+[data-workspace-origin] .workspace-marker {
+  inset: var(--workspace-origin-inset);
+  width: var(--workspace-origin-width);
 }
 .nx-content > .view { padding-inline: var(--console-gutter); }
 .view > .page-heading {
