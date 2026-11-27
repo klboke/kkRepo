@@ -87,7 +87,7 @@
 
 .page-heading {
   min-height: 76px;
-  margin: 0 24px;
+  margin: 0;
   padding: 0;
   border-bottom: 1px solid var(--line);
 }
@@ -131,7 +131,7 @@ h1 {
   height: auto;
   min-height: 54px;
   gap: 10px;
-  padding: 12px 24px 8px;
+  padding: 12px 0 8px;
 }
 
 .button-row {
@@ -238,7 +238,7 @@ h1 {
 .audit-filter-bar,
 .pagination-bar,
 .placeholder {
-  margin: 0 24px 18px;
+  margin: 0 0 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);

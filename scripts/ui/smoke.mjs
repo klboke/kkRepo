@@ -38,6 +38,20 @@ async function verifyEntryAssets(page, app) {
   }
 }
 
+async function verifyPageAlignment(view, fullWidthBlocks, leftAlignedControls) {
+  const heading = await view.locator(".page-heading").boundingBox();
+  const icon = await view.locator(".heading-icon").boundingBox();
+  for (const selector of [...fullWidthBlocks, ...leftAlignedControls]) {
+    const box = await view.locator(selector).boundingBox();
+    assert.ok(box, selector + " is visible");
+    assert.ok(Math.abs(box.x - icon.x) <= 1, selector + " aligns with the heading icon");
+    if (fullWidthBlocks.includes(selector)) {
+      assert.ok(Math.abs(box.x + box.width - heading.x - heading.width) <= 1,
+        selector + " aligns with the heading's right edge");
+    }
+  }
+}
+
 async function login(page, user, secret, target) {
   const options = page.waitForResponse(r => r.url().endsWith("/internal/security/login/options"));
   await page.goto(origin + "/browse/?login=1&returnTo=" + encodeURIComponent(target) + "#browse/welcome");
@@ -69,7 +83,11 @@ try {
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
   const edit = page.locator('.edit-repository-button[data-name="' + repo + '"]');
-  await page.setViewportSize({ width: 390, height: 844 });
+  for (const width of [1920, 1440, 1024, 820, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await verifyPageAlignment(page.locator("#repositories-view"),
+      ["#repository-usage-summary", ".fixed-table-frame"], ["#create-repository-button"]);
+  }
   const nav = page.locator("#navigation-toggle");
   await nav.click();
   await expect(page.locator("#workspace-navigation")).toBeVisible();
@@ -116,10 +134,18 @@ try {
   ]) {
     await page.goto(origin + "/admin/#admin/" + hash);
     await expect(page.locator("#" + view + "-view")).toBeVisible();
+    if (view === "cleanup-policies") {
+      await verifyPageAlignment(page.locator("#cleanup-policies-view"),
+        [".cleanup-tabs", ".cleanup-tab-panel.is-active .nx-table-frame"], []);
+    }
   }
   for (const view of ["search", "upload", "browse"]) {
     await page.goto(origin + "/browse/#browse/" + view);
     await expect(page.locator("#" + view + "-view")).toBeVisible();
+    if (view === "search") {
+      await verifyPageAlignment(page.locator("#search-view"), [".result-note", ".nx-table-frame"],
+        [".search-form > label"]);
+    }
   }
 
   // Exercise a theme and dictionary in this browser context only.

@@ -284,7 +284,7 @@ body {
   #browse-view .table-tools {
     position: static;
     width: auto;
-    padding: 12px 16px 0;
+    padding: 12px 0 0;
   }
 
   #browse-view .nx-table-frame {

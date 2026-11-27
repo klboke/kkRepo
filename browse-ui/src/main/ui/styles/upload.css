@@ -122,7 +122,7 @@
   display: grid;
   gap: 14px;
   max-width: 1080px;
-  padding: 0 12px 24px;
+  padding: 0 0 24px;
 }
 
 .token-panel {

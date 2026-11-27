@@ -54,6 +54,7 @@
   box-shadow: var(--shadow-sm);
 }
 .workspace-tabs .workspace-tab:hover { color: var(--brand-strong); background: var(--brand-tint); }
+.nx-content > .view { padding-inline: var(--console-gutter); }
 .view > .page-heading {
   display: grid;
   grid-template-columns: auto minmax(0,1fr);
@@ -63,7 +64,6 @@
   column-gap: 13px;
   row-gap: 3px;
   min-height: 84px;
-  margin-inline: var(--console-gutter);
   padding-block: 14px;
   border-bottom: 1px solid var(--line);
   background: var(--canvas);

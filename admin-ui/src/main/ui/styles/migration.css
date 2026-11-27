@@ -95,22 +95,6 @@ code {
     padding-left: 26px;
   }
 
-  .page-heading,
-  .nx-table-frame,
-  .blobstore-form,
-  .migration-result,
-  .audit-filter-bar,
-  .pagination-bar,
-  .placeholder {
-    margin-right: 16px;
-    margin-left: 16px;
-  }
-
-  .action-bar {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
   .audit-filter-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

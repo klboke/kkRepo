@@ -1,7 +1,7 @@
 .side-nav .side-group { height: 30px; color: var(--ink-3); letter-spacing: .05em; font-size: 10px; }
 .side-nav .side-group.is-current.is-open { color: var(--brand-strong); background: transparent; }
 .side-nav .side-item { height: 34px; }
-.view > .nx-table-frame { margin: 0 var(--console-gutter) 24px; }
+.view > .nx-table-frame { margin: 0 0 24px; }
 .action-bar, .table-tools { align-items: center; flex-wrap: wrap; gap: 8px; }
 .action-bar .filter-box { flex: 1 1 180px; }
 .column-choice { display: none; }
@@ -80,6 +80,5 @@
   #repositories-view .usage-table .actions-column { width: 1%; min-width: 0; }
   #repositories-view .usage-table .actions-column .row-action { margin-inline: 0; }
   #repositories-view .usage-table :is(td,th) { padding-inline: 6px; }
-  #repositories-view .usage-overview, #repositories-view .fixed-table-frame { margin-inline: var(--console-gutter); }
 }
 .user-picker-options[popover] { position: fixed; inset: auto; margin: 0; width: min-content; }

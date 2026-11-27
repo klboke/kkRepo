@@ -110,7 +110,7 @@ select {
 .docker-ops-layout {
   display: grid;
   gap: 12px;
-  padding: 0 10px 24px;
+  padding: 0 0 24px;
 }
 
 .ops-panel {

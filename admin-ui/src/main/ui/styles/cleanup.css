@@ -1000,7 +1000,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.usage-overview { flex: 0 0 auto; margin: 0 24px 8px; }
+.usage-overview { flex: 0 0 auto; margin: 0 0 8px; }
 .usage-overview .summary-grid { margin: 0; }
 .usage-overview .summary-grid .field-label { display: flex; }
 .usage-overview .summary-grid .field-help { display: inline-flex; }
@@ -1118,7 +1118,7 @@
 .credentials-notice {
   display: grid;
   gap: 4px;
-  margin: 0 24px 12px;
+  margin: 0 0 12px;
   padding: 12px 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
