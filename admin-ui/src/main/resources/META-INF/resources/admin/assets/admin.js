@@ -4970,7 +4970,7 @@ async function copySecurityApiKey() {
     if (!input.value) return;
     input.focus();
     input.select();
-    showToast("Ctrl+C / ⌘C", "info");
+    showToast("Ctrl+C / Cmd+C", "info");
   }
 }
 
