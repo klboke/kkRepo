@@ -6,6 +6,6 @@
     "rollup": "4.60.1"
   },
   "devDependencies": {
-    "@playwright/test": "1.56.1"
+    "@playwright/test": "1.65.1"
   }
 }
