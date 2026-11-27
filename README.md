@@ -74,32 +74,34 @@ Local hot-reload development and testing are documented in the [Development Guid
 
 ## Supported Capabilities
 
-| Format | Repository types | Client publish/upload | Browse and search | Nexus migration |
-| --- | --- | --- | --- | --- |
-| Maven | hosted / proxy / group | Maven deploy, PUT upload, and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| npm | hosted / proxy / group | `npm publish`, dist-tag, and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| OHPM / HarmonyOS | hosted / proxy / group | `ohpm publish` and `ohpm install`, normal/streaming HAR/HSP, tags, unpublish, and UI/API upload ([usage guide](docs/en/repository-guides/ohpm.md)) | Package/version metadata, checksums, Browse/Search, and Usage supported | Independent directory/registry import with dry-run, checksums and resume; not a Nexus migration format |
-| PyPI | hosted / proxy / group | twine upload and admin UI upload | simple index supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| Go | hosted / proxy / group | Nexus-compatible `<version>.zip` PUT plus UI/API upload; Go clients resolve private hosted and public proxied modules through one group | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| Helm | hosted / proxy / group | chart push, PUT upload, ordered group resolution, and admin UI upload | index.yaml aggregation supported | Hosted repositories are migrated by default; proxy repositories are optional; group definitions are migrated |
-| Cargo / Rust | hosted / proxy / group | `cargo publish`, yank/unyank, `CargoToken` auth, and UI/API `.crate` upload | Sparse index and `cargo search` supported | Cargo repository migration is supported |
-| Dart / Pub | hosted / proxy / group | `dart pub publish`, `dart pub get`, `flutter pub get`, `PubToken` auth, and UI/API `.tar.gz` upload | Package/version metadata, archive attributes, and Pub search supported | Nexus 3.92.0 Pub hosted migration and explicitly selected proxy cache migration are supported |
-| Composer / PHP | hosted / proxy / group | Composer has no standard publish command; Components API and UI zip/tar archive upload plus Composer 2 installation are supported | Package/version metadata, dist, HTML View, Browse/Search, and Usage supported | Native Nexus Composer proxy configuration is migrated; cache migration requires explicit administrator selection and a proven source profile |
-| Terraform Provider / Module Registry | hosted / proxy / group | Nexus-compatible PUT and UI/API archive upload; `terraform init` resolves hosted and proxied modules/providers through groups | Module/provider coordinates, versions, platforms, Browse/Search, and Usage supported | Nexus Terraform hosted data and explicitly selected proxy archive caches are migrated; proxy/group configuration is also migrated |
-| Swift Package Registry | hosted / proxy / group | `swift package-registry publish`, Basic/Bearer login, and UI/API source archive upload | Registry v1 release/manifest/archive metadata, Browse/Search, and Usage supported | Swift hosted data is `FULL` only for verified Nexus 3.92.x-3.94.x datastore shapes; drift and unavailable proxy secrets require manual action |
-| Ansible Galaxy | hosted / proxy / group | `ansible-galaxy collection publish`, Nexus-compatible raw PUT, route-scoped Base64 Bearer/Ansible 2.9 Token credentials, GenericToken, and UI/API collection upload ([usage guide](docs/en/repository-guides/ansible-galaxy.md)) | Galaxy v3 collection/version/artifact metadata, dependencies, Browse/Search, and Usage supported | Nexus 3.93.x-3.94.x repository definitions and shape-gated hosted/proxy collection data are supported; unknown datastore shapes fail closed |
-| Conda | hosted / proxy / group | Nexus-compatible raw PUT plus UI/API upload for `.tar.bz2` and `.conda` packages | Channel/subdir metadata, JSON/BZ2/ZSTD repodata, channeldata, Browse/Search, and Usage supported | Repository definitions and shape-gated Nexus 3.92.x-3.94.x hosted package data are supported; generated metadata is rebuilt on the target |
-| APT / Debian | hosted / proxy | Nexus-compatible repository-root POST and Components API/UI `.deb` upload; real `apt update`, download, install, and upgrade ([usage guide](docs/en/repository-guides/apt-debian.md)) | Signed Packages/Release metadata, by-hash, Browse/Search, and Usage supported | Repository definitions and shape-gated Nexus 3.92.x-3.94.x hosted packages are supported; signing keys require explicit import before migrated repositories are enabled |
-| Conan 2 | hosted / proxy / group | `conan upload`, Conan bearer login, and UI/API revision-file upload ([usage guide](docs/en/repository-guides/conan-2.md)) | RREV/PREV metadata, Nexus-aligned write-time Browse paths, Search, and Usage supported | Nexus 3.94 repository definitions and shape-gated hosted or explicitly selected proxy-cache revisions are supported; Conan 1 and unknown shapes fail closed |
-| Alpine / APK | hosted / proxy / group | Canonical APK v2 PUT and UI/Components API upload; real `apk update`, search, policy, fetch, install, and upgrade ([usage guide](docs/en/repository-guides/alpine-apk.md)) | Signed `APKINDEX.tar.gz`, passthrough/verified re-sign proxy, ordered group source binding, Browse/Search, and Usage supported | Nexus 3.94 definitions and shape-gated hosted packages are supported; generated indexes are rebuilt and unavailable signing keys or proxy secrets fail closed |
-| R / CRAN | hosted / proxy / group | Canonical source `.tar.gz` PUT and UI/Components API upload; real `available.packages()`, install, and update flows ([usage guide](docs/en/repository-guides/r-cran.md)) | Deterministic `PACKAGES.gz`, arbitrary-file proxy, snapshot-bound group, Browse/Search, Cleanup, scanning, and Usage supported | Nexus 3.94 definitions and shape-gated hosted source packages are supported; generated indexes and bindings are rebuilt |
-| Hugging Face Models | proxy | `hf download`, `hf_hub_download`, `snapshot_download`, Transformers, and Diffusers through `HF_ENDPOINT` ([usage guide](docs/en/repository-guides/hugging-face-models.md)) | Commit-pinned model metadata/files, server-side LFS/Xet bridge, Browse/Search, Cleanup, and scanning supported | Nexus 3.77+ definitions are recognized; explicitly selected Nexus 3.94 proxy cache is shape-gated and unknown identities fail closed |
-| Docker / OCI | hosted / proxy / group | Registry V2 login, hosted push/pull, proxy pull, group pull, OCI referrers, cleanup, and connector-port access | Manifest/tag/blob metadata supported | Hosted Docker repository data migration is supported through the Nexus Repository Data flow |
-| NuGet | hosted / proxy / group | package push and admin UI upload | v3 service index / search supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| RubyGems | hosted / proxy / group | gem push/yank and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| Yum | hosted / proxy / group | RPM upload and admin UI upload | repodata supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
-| Git LFS | hosted | Git LFS batch upload/download, Basic and GenericToken ([usage guide](docs/en/repository-guides/git-lfs.md)) | OID, size, checksums, Browse/Search supported | Nexus 3.94.x hosted content after OID/size/checksum shape validation; per-object import and resume |
-| Raw | hosted / proxy / group | PUT upload and admin UI upload | Supported | Hosted repositories are migrated by default; proxy repositories can be migrated optionally |
+| Format | Hosted | Proxy | Group | [Nexus migration](docs/en/nexus-migration-guide.md) |
+| :--- | :---: | :---: | :---: | :---: |
+| [Maven](docs/en/repository-guides/maven.md) | ✓ | ✓ | ✓ | ✓ |
+| [npm](docs/en/repository-guides/npm.md) | ✓ | ✓ | ✓ | ✓ |
+| [OHPM / HarmonyOS](docs/en/repository-guides/ohpm.md) | ✓ | ✓ | ✓ | ✗ |
+| [PyPI](docs/en/repository-guides/pypi.md) | ✓ | ✓ | ✓ | ✓ |
+| [Go](docs/en/repository-guides/go.md) | ✓ | ✓ | ✓ | ✓ |
+| [Helm](docs/en/repository-guides/helm.md) | ✓ | ✓ | ✓ | ✓ |
+| [Cargo / Rust](docs/en/repository-guides/cargo-rust.md) | ✓ | ✓ | ✓ | ✓ |
+| [Dart / Pub](docs/en/repository-guides/dart-pub.md) | ✓ | ✓ | ✓ | ✓ |
+| [Composer / PHP](docs/en/repository-guides/composer-php.md) | ✓ | ✓ | ✓ | ✓ |
+| [Terraform Provider / Module Registry](docs/en/repository-guides/terraform.md) | ✓ | ✓ | ✓ | ✓ |
+| [Swift Package Registry](docs/en/repository-guides/swift-package-registry.md) | ✓ | ✓ | ✓ | ✓ |
+| [Ansible Galaxy](docs/en/repository-guides/ansible-galaxy.md) | ✓ | ✓ | ✓ | ✓ |
+| [Conda](docs/en/repository-guides/conda.md) | ✓ | ✓ | ✓ | ✓ |
+| [APT / Debian](docs/en/repository-guides/apt-debian.md) | ✓ | ✓ | ✗ | ✓ |
+| [Conan 2](docs/en/repository-guides/conan-2.md) | ✓ | ✓ | ✓ | ✓ |
+| [Alpine / APK](docs/en/repository-guides/alpine-apk.md) | ✓ | ✓ | ✓ | ✓ |
+| [R / CRAN](docs/en/repository-guides/r-cran.md) | ✓ | ✓ | ✓ | ✓ |
+| [Hugging Face Models](docs/en/repository-guides/hugging-face-models.md) | ✗ | ✓ | ✗ | ✓ |
+| [Docker / OCI](docs/en/repository-guides/docker-oci.md) | ✓ | ✓ | ✓ | ✓ |
+| [NuGet](docs/en/repository-guides/nuget.md) | ✓ | ✓ | ✓ | ✓ |
+| [RubyGems](docs/en/repository-guides/rubygems.md) | ✓ | ✓ | ✓ | ✓ |
+| [Yum](docs/en/repository-guides/yum.md) | ✓ | ✓ | ✓ | ✓ |
+| [Git LFS](docs/en/repository-guides/git-lfs.md) | ✓ | ✗ | ✗ | ✓ |
+| [Raw](docs/en/repository-guides/raw.md) | ✓ | ✓ | ✓ | ✓ |
+
+A ✓ under Nexus migration means the format has a supported migration path. The migration guide lists the repository types, data, and Nexus versions covered.
 
 ## Migrating From Sonatype Nexus Repository
 
