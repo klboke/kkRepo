@@ -62,7 +62,7 @@
     <guava.version>33.8.0-jre</guava.version>
     <guice.version>7.0.0</guice.version>
     <re2j.version>1.8</re2j.version>
-    <maven.artifact.version>3.10.1</maven.artifact.version>
+    <maven.artifact.version>3.10.2</maven.artifact.version>
     <aws.sdk.version>2.59.5</aws.sdk.version>
     <azure.sdk.bom.version>1.3.10</azure.sdk.bom.version>
     <commons.compress.version>1.28.0</commons.compress.version>
