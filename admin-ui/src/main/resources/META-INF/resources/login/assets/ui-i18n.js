@@ -6,7 +6,7 @@
   const LANGUAGES = ["en", "zh-CN", "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru", "uk", "ja", "ko", "tr"];
   const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", ...LANGUAGES]);
   const DICTIONARY_BASE = "/login/assets/i18n/";
-  const DICTIONARY_VERSION = "20261121-block-outbound";
+  const DICTIONARY_VERSION = document.documentElement?.dataset?.dictionaryVersion || "20261121-block-outbound";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_THEME = "default";
   const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;

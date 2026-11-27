@@ -35,7 +35,7 @@ python3 scripts/ui/stage-assets.py previous-server.jar /srv/kkrepo-ui
 python3 scripts/ui/stage-assets.py candidate-server.jar /srv/kkrepo-ui
 ```
 
-For example, configure the existing NGINX proxy with the following location and its usual upstream settings in the named fallback. Each version directory contains only CSS and JavaScript referenced by a packaged HTML entry point. Keep the original MIME type configuration for JavaScript modules.
+For example, configure the existing NGINX proxy with the following location and its usual upstream settings in the named fallback. The stage includes entry scripts, stylesheets and the themes and dictionaries selected at runtime. Keep the original MIME type configuration for JavaScript modules.
 
 ```nginx
 # http context

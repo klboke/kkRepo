@@ -33,7 +33,7 @@ class BrowseProductVersionContractTest {
         + EXTERNAL_LINK_ATTRIBUTES));
     assertTrue(index.contains("class=\"lucide-icon icon-cloud-download product-update-icon\""));
     assertTrue(index.contains("data-product-update-tooltip role=\"tooltip\""));
-    assertTrue(index.contains("/login/assets/product-update.js?v=20260819-version-update-1"));
+    assertTrue(index.contains("/login/assets/product-update.js?v="));
     assertFalse(index.contains("/releases/tag/v0.9.0"));
     assertFalse(index.contains("@project.version@"));
   }

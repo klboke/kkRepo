@@ -16,9 +16,12 @@ class Assets(HTMLParser):
         super().__init__()
         self.workspace = workspace
         self.entries = set()
+        self.dictionary_version = None
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
+        if tag == "html":
+            self.dictionary_version = attrs.get("data-dictionary-version")
         url = attrs.get("src") if tag == "script" else attrs.get("href") if tag == "link" else None
         if not url:
             return
@@ -60,6 +63,18 @@ def stage(jar, destination):
         assets = Assets(workspace)
         assets.feed(resources[f"/{workspace}/index.html"].decode())
         entries.update(assets.entries)
+        default_theme = "/browse/assets/themes/default.css"
+        versions = {version for path, version in assets.entries if path == default_theme}
+        for version in versions:
+            entries.update((path, version) for path in resources if path.startswith("/browse/assets/themes/") and path.endswith(".css"))
+        dictionary_version = assets.dictionary_version
+        if not dictionary_version:
+            legacy = re.search(rb'const DICTIONARY_VERSION = "([\w-]+)"', resources["/login/assets/ui-i18n.js"])
+            dictionary_version = legacy[1].decode() if legacy else None
+        if dictionary_version:
+            if not re.fullmatch(r"[\w-]+", dictionary_version):
+                raise ValueError("Invalid dictionary version")
+            entries.update((path, dictionary_version) for path in resources if path.startswith("/login/assets/i18n/") and path.endswith(".js"))
     for path, version in sorted(entries):
         publish(destination / version / path.lstrip("/"), resources[path])
     print(f"Staged {len(entries)} versioned assets from {jar.name}")

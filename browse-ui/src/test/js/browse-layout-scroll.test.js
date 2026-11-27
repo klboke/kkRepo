@@ -22,7 +22,7 @@ test("cache-busts the current Browse assets", () => {
 
   assert.match(html, /browse\.css\?v=[a-f0-9]{16}/);
   assert.match(html, /browse\.js\?v=[a-f0-9]{16}/);
-  assert.match(html, /format-icons\.css\?v=20261118-format-icons-1/);
+  assert.match(html, /format-icons\.css\?v=[a-f0-9]{16}/);
 });
 
 test("keeps the icon format picker below its trigger", () => {

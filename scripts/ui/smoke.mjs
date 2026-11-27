@@ -95,6 +95,21 @@ try {
     await expect(page.locator("#" + view + "-view")).toBeVisible();
   }
 
+  // Exercise a theme and dictionary in this browser context only.
+  await page.evaluate(() => window.kkrepoI18n.ready());
+  const theme = await page.evaluate(() => {
+    window.kkrepoTheme.applyTheme("indigo", ["default", "indigo"]);
+    return document.getElementById("kkrepo-theme-stylesheet").href;
+  });
+  assert.equal(new URL(theme).searchParams.get("v"), await page.locator("html").getAttribute("data-theme-version"));
+  assert.ok((await page.request.get(theme)).ok());
+  await page.evaluate(() => window.kkrepoI18n.setDefaultLanguage("fr"));
+  const dictionary = page.locator('script[src*="/login/assets/i18n/fr.js"]');
+  await expect(dictionary).toBeAttached();
+  const localeUrl = await dictionary.evaluate(element => element.src);
+  assert.equal(new URL(localeUrl).searchParams.get("v"), await page.locator("html").getAttribute("data-dictionary-version"));
+  assert.ok((await page.request.get(localeUrl)).ok());
+
   const limited = await browser.newPage();
   limited.on("pageerror", error => pageErrors.push(error.message));
   await login(limited, reader, readerPassword, "/browse/#browse/welcome");
@@ -103,7 +118,7 @@ try {
   await expect(limited).toHaveURL(/\/browse\//);
   await expect(limited.locator("#admin-workspace-link")).toBeHidden();
   assert.deepEqual(pageErrors, []);
-  console.log("Passed anonymous Browse, login return, Proxy save and reload, modal Escape, Admin and Browse navigation, and restricted Admin deep link.");
+  console.log("Passed anonymous Browse, login return, Proxy save and reload, modal Escape, Admin and Browse navigation, theme and locale loading, and restricted Admin deep link.");
 } finally {
   await browser.close();
   const results = await Promise.allSettled(cleanup.map(path => api(path, "DELETE")));
