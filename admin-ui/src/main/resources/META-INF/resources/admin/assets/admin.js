@@ -4929,6 +4929,7 @@ function renderSecurityApiKeys() {
 }
 
 let apiKeyOwnerPicker;
+let apiKeyFormGeneration = 0;
 
 function showSecurityApiKeyForm() {
   apiKeyOwnerPicker ||= window.KkUserPicker.create({
@@ -4946,12 +4947,36 @@ function showSecurityApiKeyForm() {
 }
 
 function hideSecurityApiKeyForm() {
+  ++apiKeyFormGeneration;
+  document.getElementById("save-security-api-key-button").disabled = false;
   apiKeyOwnerPicker?.close();
   closeFormModal("security-api-key-form");
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
+function hideSecurityApiKeyResult() {
+  document.getElementById("security-api-key-value").value = "";
+  closeFormModal("security-api-key-result");
+  document.getElementById("create-security-api-key-button").focus();
+}
+
+async function copySecurityApiKey() {
+  const input = document.getElementById("security-api-key-value");
+  if (!input.value) return;
+  try {
+    await copyLocationText(input.value);
+    showToast("Copied", "ok");
+  } catch {
+    if (!input.value) return;
+    input.focus();
+    input.select();
+    showToast("Ctrl+C / ⌘C", "info");
+  }
+}
+
 async function saveSecurityApiKey() {
+  const save = document.getElementById("save-security-api-key-button");
+  if (save.disabled) return;
   if (!apiKeyOwnerPicker?.validate()) return;
   if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
@@ -4960,6 +4985,8 @@ async function saveSecurityApiKey() {
     ownerUserId: document.getElementById("security-api-key-owner-user-id").value.trim(),
     displayName: document.getElementById("security-api-key-display-name").value.trim() || null
   };
+  const generation = apiKeyFormGeneration;
+  save.disabled = true;
   try {
     const response = await fetch("/internal/security/api-keys", {
       method: "POST",
@@ -4968,11 +4995,20 @@ async function saveSecurityApiKey() {
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const created = await response.json();
-    hideSecurityApiKeyForm();
+    if (generation === apiKeyFormGeneration) {
+      hideSecurityApiKeyForm();
+      if (created.token) {
+        document.getElementById("security-api-key-value").value = created.token;
+        openFormModal("security-api-key-result", "security-api-key-value");
+      } else {
+        showToast("API key imported.", "ok");
+      }
+    }
     await loadSecurityApiKeys();
-    showToast(created.token ? `API key created: ${created.token}` : "API key imported.", "ok");
   } catch (error) {
-    showToast(`Create failed: ${error.message}`, "error");
+    if (generation === apiKeyFormGeneration) showToast(`Create failed: ${error.message}`, "error");
+  } finally {
+    if (generation === apiKeyFormGeneration) save.disabled = false;
   }
 }
 
@@ -8603,6 +8639,10 @@ function switchView(view, options = {}) {
     return false;
   }
   if (!canAccessAdminView(view)) return false;
+  if (view !== "security-api-keys" && document.getElementById("security-api-keys-view").classList.contains("is-active")) {
+    hideSecurityApiKeyForm();
+    hideSecurityApiKeyResult();
+  }
   if (view !== "security-scanning") ++securityScanState.repositoryEditRequest;
   if (options.updateHash !== false) {
     updateHashForView(view, Boolean(options.replaceHash));
@@ -8692,6 +8732,7 @@ initializeSideGroups();
   ["security-role-form", hideSecurityRoleForm],
   ["security-privilege-form", hideSecurityPrivilegeForm],
   ["security-api-key-form", hideSecurityApiKeyForm],
+  ["security-api-key-result", hideSecurityApiKeyResult],
   ["security-scan-repository-form", hideSecurityScanRepositoryForm],
   ["security-scan-policy-form", hideSecurityScanPolicyForm],
   ["security-scan-waiver-form", hideSecurityScanWaiverForm],
@@ -9219,6 +9260,7 @@ document.getElementById("ui-default-theme").addEventListener("change", previewUi
 bindRequiredFieldErrors(uiSettingsRequiredFields);
 window.addEventListener("kkrepo:i18n-change", syncUiSettingsForm);
 
+document.getElementById("copy-security-api-key").addEventListener("click", copySecurityApiKey);
 document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
 document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);
 document.getElementById("save-security-api-key-button").addEventListener("click", saveSecurityApiKey);
