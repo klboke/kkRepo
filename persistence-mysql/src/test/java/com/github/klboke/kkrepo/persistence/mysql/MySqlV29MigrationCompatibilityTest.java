@@ -7,17 +7,45 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 72;
+  private static final int LATEST_MIGRATION = 75;
   private static final Map<String, String> V29_SHA256 = checksums();
+
+  /**
+   * Counts the migrations actually present above a baseline instead of subtracting version
+   * numbers. A stacked branch may legitimately skip a version that another unmerged branch owns;
+   * Flyway executes only the files that exist, so the assertion must do the same.
+   */
+  private static long migrationsAfter(int baseline) {
+    try {
+      Resource[] resources = new PathMatchingResourcePatternResolver()
+          .getResources("classpath*:db/migration/mysql/V*.sql");
+      return Arrays.stream(resources)
+          .map(Resource::getFilename)
+          .filter(Objects::nonNull)
+          .distinct()
+          .map(name -> name.substring(1, name.indexOf('_')))
+          .mapToInt(Integer::parseInt)
+          .filter(version -> version > baseline)
+          .count();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
@@ -40,7 +68,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       if (afterBackfill) jdbc().execute(sql.substring(sql.indexOf(';') + 1));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 65, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(65), resumed.migrate().migrationsExecuted);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(1, jdbc().queryForObject("SELECT COUNT(*) FROM docker_connector_binding", Integer.class));
@@ -59,7 +87,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 63, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(63), resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(3, jdbc().queryForObject("""
@@ -79,7 +107,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 60, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(60), resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(2, jdbc().queryForObject("""
@@ -99,7 +127,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 61, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(61), resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(2, jdbc().queryForObject("""
@@ -119,7 +147,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 58, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(58), resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(2, jdbc().queryForObject("""
@@ -140,7 +168,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
 
       Flyway resumed = migration(null);
-      assertEquals(LATEST_MIGRATION - 69, resumed.migrate().migrationsExecuted);
+      assertEquals(migrationsAfter(69), resumed.migrate().migrationsExecuted);
       assertEquals(0, resumed.migrate().migrationsExecuted);
       assertTrue(resumed.validateWithResult().validationSuccessful);
       assertEquals(0L, jdbc().queryForObject(
@@ -165,7 +193,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     }
 
     Flyway resumed = migration(null);
-    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(71), resumed.migrate().migrationsExecuted);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(2, jdbc().queryForObject("""
@@ -248,7 +276,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(LATEST_MIGRATION - 35, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(35), resumed.migrate().migrationsExecuted);
     assertEquals(
         Integer.toString(LATEST_MIGRATION),
         resumed.info().current().getVersion().getVersion());
@@ -285,7 +313,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         """);
 
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 39, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(39), resumed.migrate().migrationsExecuted);
     assertEquals(
         Integer.toString(LATEST_MIGRATION),
         resumed.info().current().getVersion().getVersion());

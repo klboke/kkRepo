@@ -694,7 +694,8 @@ public abstract class PersistenceApiContract {
         "terraform_source_binding",
         "ui_settings",
         "outbound_proxy_settings",
-        "download_offload_settings"), databaseTables());
+        "download_offload_settings",
+        "winget_manifest"), databaseTables());
   }
 
   @Test

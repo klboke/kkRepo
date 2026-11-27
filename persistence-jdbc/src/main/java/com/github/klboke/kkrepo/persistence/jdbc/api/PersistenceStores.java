@@ -86,6 +86,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   UiSettingsDao uiSettings();
 
+  WingetDao winget();
+
   OutboundProxySettingsDao outboundProxySettings();
 
   DownloadOffloadSettingsDao downloadOffloadSettings();

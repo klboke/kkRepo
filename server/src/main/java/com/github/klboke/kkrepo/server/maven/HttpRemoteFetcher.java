@@ -195,6 +195,13 @@ public class HttpRemoteFetcher {
       throws IOException {
     URI uri = target.uri();
     Map<String, String> headers = new LinkedHashMap<>();
+    // Caller-supplied headers first, so the standard transport headers below always win and a
+    // caller cannot accidentally replace the security-relevant ones.
+    for (Map.Entry<String, String> extra : req.extraHeaders().entrySet()) {
+      if (extra.getKey() != null && extra.getValue() != null && !extra.getValue().isBlank()) {
+        headers.put(extra.getKey(), extra.getValue());
+      }
+    }
     headers.put("Accept", req.accept() == null || req.accept().isBlank() ? "*/*" : req.accept());
     headers.put("User-Agent", "kkrepo/0.1");
     if (req.byteRange() != null) {
@@ -264,7 +271,7 @@ public class HttpRemoteFetcher {
             preserveBody ? req.requestBody() : null,
             preserveBody ? req.requestContentType() : null,
             req.ntlmCredentialsForRedirect(uri, redirected),
-            req.repositoryOrigin(), req.redirectPolicy(), req.byteRange());
+            req.repositoryOrigin(), req.redirectPolicy(), req.byteRange(), req.extraHeaders());
         Result redirectedResult = fetchInternal(redirectedRequest, redirects + 1);
         return redirectedResult.withInheritedHeaders(redirectHeaders);
       }
@@ -396,7 +403,8 @@ public class HttpRemoteFetcher {
       NtlmCredentials ntlmCredentials,
       RepositoryOrigin repositoryOrigin,
       com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy redirectPolicy,
-      ByteRange byteRange) {
+      ByteRange byteRange,
+      Map<String, String> extraHeaders) {
     public Request(
       String url,
       String etag,
@@ -416,7 +424,7 @@ public class HttpRemoteFetcher {
       NtlmCredentials ntlmCredentials,
       RepositoryOrigin repositoryOrigin,
       com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy redirectPolicy) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, null);
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, null, null);
     }
 
     /** Existing callers retain the strict redirect default. */
@@ -551,6 +559,9 @@ public class HttpRemoteFetcher {
               .filter(host -> !host.isBlank())
               .collect(java.util.stream.Collectors.toUnmodifiableSet());
       requestBody = requestBody == null ? null : requestBody.clone();
+      extraHeaders = extraHeaders == null || extraHeaders.isEmpty()
+          ? Map.of()
+          : Map.copyOf(extraHeaders);
     }
 
     public static Request get(String url) {
@@ -561,7 +572,7 @@ public class HttpRemoteFetcher {
     public Request withRedirectBoundary() {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, URI.create(url).getHost(), authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange, extraHeaders);
     }
 
     /** Authorizes a metadata-selected URL while retaining credentials only for the configured origin. */
@@ -577,32 +588,32 @@ public class HttpRemoteFetcher {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           configured.repository(), configured.format(), target.getHost(), configured.authorizationHeader(),
           configured.allowedUnsignedRedirectHosts(), configured.outboundProxy(), accept, requestBody,
-          requestContentType, configured.ntlmCredentials(), origin, configured.redirectPolicy(), byteRange);
+          requestContentType, configured.ntlmCredentials(), origin, configured.redirectPolicy(), byteRange, extraHeaders);
     }
 
     public Request withByteRange(String range, String ifRange) {
       return new Request(url, null, null, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
           outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin,
-          redirectPolicy, new ByteRange(range, ifRange));
+          redirectPolicy, new ByteRange(range, ifRange), extraHeaders);
     }
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange, extraHeaders);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange, extraHeaders);
     }
 
     public Request withAccept(String accept) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange, extraHeaders);
     }
 
     /** Creates a read-only POST request, used by Hub paths-info. */
@@ -615,7 +626,24 @@ public class HttpRemoteFetcher {
       }
       return new Request(url, etag, lastModified, timeout, timeoutProfile, false,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, body, contentType, ntlmCredentials, repositoryOrigin);
+          outboundProxy, accept, body, contentType, ntlmCredentials, repositoryOrigin,
+          null, byteRange, extraHeaders);
+    }
+
+    /** Adds caller-supplied request headers; the standard transport headers always win. */
+    public Request withExtraHeaders(Map<String, String> headers) {
+      java.util.Map<String, String> merged = new java.util.LinkedHashMap<>(extraHeaders);
+      if (headers != null) {
+        headers.forEach((name, value) -> {
+          if (name != null && value != null && !value.isBlank()) {
+            merged.put(name, value);
+          }
+        });
+      }
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin,
+          redirectPolicy, byteRange, merged);
     }
 
     /** Explicitly retains exact/domain rules for authentication and discovery GET requests. */
@@ -659,7 +687,7 @@ public class HttpRemoteFetcher {
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          content && runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange);
+          content && runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange, extraHeaders);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -692,7 +720,7 @@ public class HttpRemoteFetcher {
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange);
+          runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange, extraHeaders);
     }
 
     public String method() {

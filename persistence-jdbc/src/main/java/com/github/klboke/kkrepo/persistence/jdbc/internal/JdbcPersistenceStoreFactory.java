@@ -48,6 +48,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.WingetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialects;
@@ -113,6 +114,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc),
+        new JdbcWingetDao(jdbc),
         new JdbcOutboundProxySettingsDao(jdbc),
         new JdbcDownloadOffloadSettingsDao(jdbc));
   }
@@ -160,6 +162,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,
       UiSettingsDao uiSettings,
+      WingetDao winget,
       OutboundProxySettingsDao outboundProxySettings,
       DownloadOffloadSettingsDao downloadOffloadSettings) implements PersistenceStores {
   }
