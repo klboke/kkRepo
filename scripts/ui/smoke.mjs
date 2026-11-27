@@ -52,6 +52,18 @@ async function verifyPageAlignment(view, fullWidthBlocks, leftAlignedControls) {
   }
 }
 
+async function verifyControlIcons(page) {
+  const missingFilterIcons = await page.locator('input[type="search"]').evaluateAll(inputs => inputs
+    .filter(input => input.closest(".filter-box") || input.placeholder.startsWith("Filter"))
+    .filter(input => !input.previousElementSibling?.matches('.lucide-icon[aria-hidden="true"]'))
+    .map(input => input.id || input.placeholder));
+  assert.deepEqual(missingFilterIcons, [], "Filter fields have a leading icon");
+  const missingCreateIcons = await page.locator(".action-bar button, .security-scan-list-toolbar button").evaluateAll(buttons =>
+    buttons.filter(button => button.textContent.trim().startsWith("Create ") && !button.querySelector(".icon-plus"))
+      .map(button => button.id));
+  assert.deepEqual(missingCreateIcons, [], "Create actions have a plus icon");
+}
+
 async function login(page, user, secret, target) {
   const options = page.waitForResponse(r => r.url().endsWith("/internal/security/login/options"));
   await page.goto(origin + "/browse/?login=1&returnTo=" + encodeURIComponent(target) + "#browse/welcome");
@@ -79,6 +91,7 @@ try {
   await page.goto(origin + "/browse/");
   await expect(page.locator("#welcome-view")).toBeVisible();
   await verifyEntryAssets(page, "browse");
+  await verifyControlIcons(page);
   await page.setViewportSize({ width: 390, height: 844 });
   const browseNav = page.locator("#navigation-toggle");
   await browseNav.click();
@@ -101,6 +114,7 @@ try {
   await login(page, username, password, adminRoute);
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
+  await verifyControlIcons(page);
   const repositoryIcons = await page.locator("#side-group-repository-items .side-item-icon")
     .evaluateAll(icons => icons.map(icon => getComputedStyle(icon).maskImage));
   assert.ok(repositoryIcons.length > 0 && !repositoryIcons.includes("none"));

@@ -47,10 +47,17 @@ function cell(row, value, code = false) {
   td.append(content); row.append(td);
   return td;
 }
-function button(parent, label, action, disabled) {
+function button(parent, label, action, disabled, icon) {
   const item = document.createElement("button");
   item.type = "button"; item.className = "create-button secondary";
-  item.textContent = label; item.disabled = Boolean(disabled);
+  if (icon) {
+    const glyph = document.createElement("span");
+    glyph.className = "lucide-icon icon-" + icon;
+    glyph.ariaHidden = "true";
+    item.append(glyph, " ");
+  }
+  item.append(label);
+  item.disabled = Boolean(disabled);
   item.addEventListener("click", action); parent.append(item);
 }
 function render() {
@@ -66,7 +73,7 @@ function render() {
     cell(row, usedBy.join(", "));
     const actions = document.createElement("td"); actions.className = "selector-actions";
     button(actions, options.permissions.update ? "Edit" : "View", () => edit(selector));
-    button(actions, "Create privilege", () => privilege(selector), !options.permissions.createPrivilege);
+    button(actions, "Create privilege", () => privilege(selector), !options.permissions.createPrivilege, "plus");
     button(actions, "Delete", () => remove(selector), !options.permissions.delete || usedBy.length > 0);
     row.append(actions); body.append(row);
   });

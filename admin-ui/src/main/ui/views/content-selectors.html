@@ -4,9 +4,9 @@
             <h1>Content Selectors</h1><span class="heading-copy">Grant access to selected repository content</span>
           </div>
           <div class="action-bar action-bar-with-note">
-            <button class="create-button" id="selector-create" type="button" disabled>Create selector</button>
+            <button class="create-button" id="selector-create" type="button" disabled><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create selector</button>
             <button class="create-button secondary" id="selector-refresh" type="button">Refresh</button>
-            <label class="filter-box"><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
+            <label class="filter-box"><span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
             <p class="form-note action-bar-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
           </div>
           <p id="selector-status" role="status" aria-live="polite"></p>
@@ -60,7 +60,7 @@
                 </fieldset>
                 <p class="form-note">Assign the new privilege to a role in Security → Roles, then assign that role to users.</p>
                 <p id="selector-privilege-error" role="alert"></p>
-                <div class="form-actions"><button class="create-button" id="selector-privilege-save" type="submit">Create privilege</button><button class="create-button secondary" type="button" data-modal-dismiss="selector-privilege-form">Cancel</button></div>
+                <div class="form-actions"><button class="create-button" id="selector-privilege-save" type="submit"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create privilege</button><button class="create-button secondary" type="button" data-modal-dismiss="selector-privilege-form">Cancel</button></div>
               </form>
             </div>
           </div>

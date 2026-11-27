@@ -48,17 +48,20 @@
                     <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
                   </button>
                   <div class="recipe-combobox-popover" id="repository-recipe-popover" popover="manual" hidden>
-                    <input
-                        class="recipe-combobox-search"
-                        id="repository-recipe-search"
-                        type="search"
-                        placeholder="Filter recipes"
-                        role="combobox"
-                        aria-autocomplete="list"
-                        aria-controls="repository-recipe-options"
-                        aria-expanded="true"
-                        aria-label="Filter repository recipes"
-                        autocomplete="off">
+                    <label class="filter-box option-filter">
+                      <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+                      <input
+                          class="recipe-combobox-search"
+                          id="repository-recipe-search"
+                          type="search"
+                          placeholder="Filter recipes"
+                          role="combobox"
+                          aria-autocomplete="list"
+                          aria-controls="repository-recipe-options"
+                          aria-expanded="true"
+                          aria-label="Filter repository recipes"
+                          autocomplete="off">
+                    </label>
                     <div
                         class="recipe-combobox-options"
                         id="repository-recipe-options"
@@ -530,7 +533,10 @@
                   <div class="member-pane-head">
                     <span class="member-pane-title">Available <span class="member-count" id="member-available-count">0</span></span>
                   </div>
-                  <input type="search" class="member-filter" id="member-filter" placeholder="Filter by name…" autocomplete="off">
+                  <label class="filter-box option-filter">
+                    <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+                    <input type="search" class="member-filter" id="member-filter" placeholder="Filter by name…" aria-label="Filter by name…" autocomplete="off">
+                  </label>
                   <ul role="listbox" aria-multiselectable="true" class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
                 </div>
                 <div class="member-actions" role="group" aria-label="Move members">

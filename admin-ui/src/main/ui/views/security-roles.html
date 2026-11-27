@@ -27,7 +27,10 @@
                     <div class="member-pane-head">
                       <span class="member-pane-title">Available <span class="member-count" id="role-privilege-available-count">0</span></span>
                     </div>
-                    <input type="search" class="member-filter" id="role-privilege-filter" placeholder="Filter privileges..." autocomplete="off">
+                    <label class="filter-box option-filter">
+                      <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+                      <input type="search" class="member-filter" id="role-privilege-filter" placeholder="Filter privileges..." aria-label="Filter privileges..." autocomplete="off">
+                    </label>
                     <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-privilege-available-list" tabindex="0" aria-label="Available privileges"></ul>
                   </div>
                   <div class="member-actions" role="group" aria-label="Move privileges">
@@ -51,7 +54,10 @@
                     <div class="member-pane-head">
                       <span class="member-pane-title">Available <span class="member-count" id="role-contained-available-count">0</span></span>
                     </div>
-                    <input type="search" class="member-filter" id="role-contained-filter" placeholder="Filter roles..." autocomplete="off">
+                    <label class="filter-box option-filter">
+                      <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+                      <input type="search" class="member-filter" id="role-contained-filter" placeholder="Filter roles..." aria-label="Filter roles..." autocomplete="off">
+                    </label>
                     <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-contained-available-list" tabindex="0" aria-label="Available roles"></ul>
                   </div>
                   <div class="member-actions" role="group" aria-label="Move roles">
