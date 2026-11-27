@@ -101,6 +101,18 @@ try {
   await login(page, username, password, adminRoute);
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
+  const filter = page.locator("#repository-filter");
+  const filterFrame = page.locator(".filter-box").filter({ has: filter });
+  await page.locator("#create-repository-button").focus();
+  const idleShadow = await filterFrame.evaluate(frame => getComputedStyle(frame).boxShadow);
+  await page.keyboard.press("Tab");
+  await expect(filter).toBeFocused();
+  await expect(filter).toHaveCSS("outline-style", "none");
+  await expect(filterFrame).not.toHaveCSS("box-shadow", idleShadow);
+  await page.emulateMedia({ forcedColors: "active" });
+  await expect(filterFrame).toHaveCSS("outline-style", "solid");
+  await expect(filter).toHaveCSS("outline-style", "none");
+  await page.emulateMedia({ forcedColors: "none" });
   const edit = page.locator('.edit-repository-button[data-name="' + repo + '"]');
   for (const width of [1920, 1440, 1024, 820, 390]) {
     await page.setViewportSize({ width, height: 844 });

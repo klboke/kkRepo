@@ -83,7 +83,20 @@
   outline: 2px solid var(--brand-strong);
   outline-offset: 2px;
 }
-.nx-shell :is(.filter-box,.select-filter):focus-within { border-color: var(--brand); box-shadow: var(--focus-ring); }
+.nx-shell :is(.filter-box,.select-filter,.audit-field,.cleanup-repository-search):focus-within {
+  border-color: var(--brand);
+  box-shadow: var(--focus-ring);
+}
+.nx-shell :is(.filter-box,.select-filter,.audit-field,.cleanup-repository-search) > :is(input,select):focus {
+  outline: none;
+  box-shadow: none;
+}
+@media (forced-colors: active) {
+  .nx-shell :is(.filter-box,.select-filter,.audit-field,.cleanup-repository-search):focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
 .nx-shell :is(.create-button,.upload-button,.secondary-button,.row-action,.member-action,.usage-copy,.repo-copy-button) {
   border-radius: var(--r-sm);
   transition: background-color .14s, border-color .14s, box-shadow .14s;
