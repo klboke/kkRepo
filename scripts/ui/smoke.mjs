@@ -247,13 +247,41 @@ try {
   }
   await page.goto(origin + "/admin/#admin/repository/docker");
   const dockerView = page.locator("#docker-registry-view");
-  await expect(dockerView.locator("#docker-transfer-summary > div")).toHaveCount(4);
+  await expect(dockerView.locator("#docker-connector-summary")).toContainText("Active ports");
   for (const width of [1920, 1440, 1024, 820, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await verifyPageAlignment(dockerView, [
-      ".ops-panel:first-child .ops-panel-head", "#docker-connector-summary", ".nx-table-frame",
-      ".ops-panel:last-child .ops-panel-head", "#docker-transfer-summary", "#docker-operations-status",
-    ], ["#docker-connectors-refresh-button"]);
+      ".docker-section-head:has(#docker-connectors-title)", ".nx-table-frame",
+      ".docker-section-head:has(#docker-transfers-title)", "#docker-transfer-summary",
+      ".docker-details > details:first-child", ".docker-details > details:last-child",
+    ], []);
+  }
+  const diagnostics = dockerView.locator("details").filter({ has: page.locator("#docker-node-id") });
+  await diagnostics.locator("summary").press("Enter");
+  await expect(diagnostics.locator("#docker-node-id")).toBeVisible();
+  await expect(diagnostics.locator("#docker-node-id")).not.toHaveText("—");
+  const cacheButton = dockerView.locator("#docker-cache-clear-button");
+  await dockerView.locator("summary").filter({ hasText: "Cache maintenance" }).press("Space");
+  let cacheRequests = 0;
+  const cacheEndpoint = "**/internal/docker/cache/clear";
+  await page.route(cacheEndpoint, route => {
+    assert.equal(route.request().method(), "POST");
+    cacheRequests++;
+    return route.fulfill({ json: { cleared: true, repositories: 3 } });
+  });
+  try {
+    await cacheButton.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Clear cache for all Docker repositories?" });
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(cacheButton).toBeFocused();
+    assert.equal(cacheRequests, 0);
+    await cacheButton.click();
+    await dialog.getByRole("button", { name: "Clear Docker cache" }).click();
+    await expect.poll(() => cacheRequests).toBe(1);
+    await expect(cacheButton).toBeEnabled();
+  } finally {
+    await page.unroute(cacheEndpoint);
   }
   await page.setViewportSize({ width: 1024, height: 620 });
   await page.goto(origin + "/admin/#admin/system/download-offload");

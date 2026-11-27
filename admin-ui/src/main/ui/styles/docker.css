@@ -1,0 +1,95 @@
+.docker-ops-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  padding-block: 16px 24px;
+}
+.docker-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 9px;
+}
+.docker-section-head h2 { margin: 0; color: var(--ink-1); font-size: 17px; }
+.docker-section-head button, #docker-last-sync { margin-inline-start: auto; }
+#docker-connector-summary, #docker-last-sync, .docker-repo-type, .docker-limit, .docker-url-label, .docker-url-unset {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+#docker-operations-status {
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  border-inline-start: 3px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+.nx-shell .docker-connector-table { min-width: 0; }
+.nx-shell .docker-connector-table td { height: auto; padding-block: 8px; }
+.docker-repo-type, .docker-tls { display: block; font-size: var(--fs-xs); }
+.docker-url-label { display: none; }
+.docker-transfers, .docker-details details {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+}
+.docker-transfers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  background: var(--surface-muted);
+}
+.docker-transfers > div { padding: 10px 14px; }
+.docker-transfers > div + div { border-inline-start: 1px solid var(--line); }
+.docker-transfers dt { color: var(--ink-3); }
+.docker-transfers dd { margin: 3px 0 0; }
+.docker-transfers strong { color: var(--ink-1); font-size: 20px; font-variant-numeric: tabular-nums; }
+.docker-limit { display: inline-block; margin-inline-start: 8px; }
+.docker-details { display: grid; gap: 10px; }
+.docker-details details { min-width: 0; background: var(--surface); }
+.docker-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 13px;
+  border-radius: inherit;
+  cursor: pointer;
+  list-style: none;
+  font-weight: var(--fw-semibold);
+}
+.docker-details summary::-webkit-details-marker { display: none; }
+.docker-details summary:hover { background: var(--surface-muted); }
+.docker-details details[open] > summary .icon-chevron-right { transform: rotate(90deg); }
+#docker-last-sync { text-align: end; font-weight: normal; }
+.docker-diagnostics, .docker-cache-maintenance {
+  margin: 0;
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+}
+.docker-diagnostics { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 16px; }
+.docker-diagnostics dt, .docker-cache-maintenance p { color: var(--ink-3); }
+.docker-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
+.docker-cache-maintenance { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.docker-cache-maintenance p { margin: 0; }
+@media (max-width: 650px) {
+  #docker-connector-summary { flex-basis: 100%; order: 1; }
+  .docker-limit { display: block; margin-inline-start: 0; }
+  .docker-connector-table, .docker-connector-table tbody { display: block; }
+  .docker-connector-table thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .docker-connector-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 3px 8px;
+    padding: 9px 12px;
+  }
+  .docker-connector-table tbody tr + tr { border-top: 1px solid var(--line); }
+  .nx-shell .docker-connector-table td { padding: 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .docker-repo-cell { grid-area: 1 / 1; }
+  .docker-state-cell { grid-area: 1 / 2; }
+  .docker-connector-table :is(.docker-listener-cell, .docker-url-cell, .empty-cell) { grid-column: 1 / -1; }
+  .docker-url-label { display: inline; margin-inline-end: 5px; }
+}
+.docker-tls summary { cursor: pointer; }
+.docker-tls > code { display: block; max-inline-size: 32ch; white-space: normal; overflow-wrap: anywhere; }

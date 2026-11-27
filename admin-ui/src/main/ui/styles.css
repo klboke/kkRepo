@@ -8,3 +8,4 @@
 @import "./styles/system.css";
 @import "#ui-shared/console.css";
 @import "./styles/workspace.css";
+@import "./styles/docker.css";

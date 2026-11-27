@@ -107,39 +107,6 @@ select {
   font-size: 18px;
 }
 
-.docker-ops-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  padding: 0 0 24px;
-}
-
-.ops-panel {
-  border-top: 1px solid var(--line);
-  background: #ffffff;
-  overflow-wrap: anywhere;
-}
-
-.ops-panel-head {
-  border-bottom: 1px solid var(--line);
-  background: var(--header);
-  color: #333333;
-  font-weight: 700;
-  padding: 9px 10px;
-}
-
-.ops-panel .summary-grid > div {
-  padding-inline: 10px;
-}
-
-.ops-panel .docker-connector-table {
-  min-width: 0;
-}
-
-.ops-panel .docker-connector-table th {
-  white-space: normal;
-}
-
 .ops-status {
   min-height: 18px;
   margin: 0 10px 12px;
@@ -148,10 +115,6 @@ select {
 
 .ops-status.error {
   color: var(--danger);
-}
-
-.ops-panel > .ops-status {
-  margin-inline: 0;
 }
 
 .migration-progress-panel {

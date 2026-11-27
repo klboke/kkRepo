@@ -1,9 +1,9 @@
-import { card, escapeHtml, formatInstant, lowerOrEmpty } from "../controls/display.js";
+import { escapeHtml, formatInstant, lowerOrEmpty } from "../controls/display.js";
 import { activeFieldHelpTrigger, showFieldHelpPopover } from "../controls/help.js";
 import { showToast } from "../controls/toast.js";
 import { responseErrorMessage } from "../shell/http.js";
 
-let dockerOperations = null;
+let dockerLoadVersion = 0;
 
 async function loadDockerTlsBundles() {
   const help = document.getElementById("docker-tls-help");
@@ -36,69 +36,78 @@ async function loadDockerTlsBundles() {
 }
 
 async function loadDockerOperations() {
-  const summary = document.getElementById("docker-connector-summary");
-  const table = document.getElementById("docker-connector-table");
-  const transfer = document.getElementById("docker-transfer-summary");
-  if (!summary || !table || !transfer) return;
-  summary.innerHTML = card("Status", "Loading");
-  table.innerHTML = '<tr><td colspan="6" class="empty-cell">Loading Docker connector runtime...</td></tr>';
-  transfer.innerHTML = "";
+  const version = ++dockerLoadVersion;
+  renderDockerOperations(null);
   try {
     const response = await fetch("/internal/docker/connectors", {
       headers: { Accept: "application/json" },
       cache: "no-store",
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    dockerOperations = await response.json();
-    renderDockerOperations(dockerOperations);
+    const snapshot = await response.json();
+    if (version === dockerLoadVersion) renderDockerOperations(snapshot);
   } catch (error) {
-    renderDockerOperationsError(error.message);
+    if (version === dockerLoadVersion) renderDockerOperations(null, error.message || "Docker operations request failed.");
   }
 }
 
-function renderDockerOperations(payload) {
-  const connector = payload?.connector || {};
-  const transfer = payload?.transfer || {};
-  const connectors = Array.isArray(connector.connectors) ? connector.connectors : [];
-  const active = connectors.filter((item) => item.active).length;
-  const errors = connector.lastError ? 1 : 0;
-  document.getElementById("docker-connector-summary").innerHTML = [
-    card("Enabled", connector.enabled ? "Yes" : "No"),
-    card("Active ports", `${active} / ${connectors.length}`),
-    card("Sequence", connector.sequence ?? "-"),
-    card("Node", connector.nodeId || "-"),
-    card("Last refreshed", formatInstant(connector.refreshedAt) || "-"),
-    card("Runtime errors", errors ? "Yes" : "No"),
-  ].join("");
-  document.getElementById("docker-transfer-summary").innerHTML = [
-    card("Active uploads", transfer.activeUploads ?? 0),
-    card("Max uploads", transfer.maxConcurrentUploads ? transfer.maxConcurrentUploads : "Unlimited"),
-    card("Active downloads", transfer.activeDownloads ?? 0),
-    card("Max downloads", transfer.maxConcurrentDownloads ? transfer.maxConcurrentDownloads : "Unlimited"),
-  ].join("");
-  document.getElementById("docker-connector-table").innerHTML = connectors.map((item) => `
-    <tr>
-      <td>${escapeHtml(item.repositoryName || "")}</td>
-      <td>${escapeHtml(lowerOrEmpty(item.repositoryType))}</td>
-      <td><code>${escapeHtml(item.scheme || "http")} : ${escapeHtml(item.port ?? "")}</code></td>
-      <td>${item.publicUrl ? `<code>${escapeHtml(item.publicUrl)}</code>` : '<span class="health-muted">-</span>'}</td>
-      <td><span class="state-badge compact ${item.active ? "ok" : "warn"}">${escapeHtml(item.state || "")}</span></td>
-      <td>${item.active ? "Yes" : "No"}${item.tlsBundle ? `<br><code title="${escapeHtml(item.certificateFingerprint || "")}">${escapeHtml(item.tlsBundle)}</code>` : ""}</td>
-    </tr>
-  `).join("") || '<tr><td colspan="6" class="empty-cell">No Docker connector ports configured.</td></tr>';
-  const status = document.getElementById("docker-operations-status");
-  status.textContent = connector.lastError ? `Last runtime error: ${connector.lastError}` : "";
-  status.classList.toggle("error", Boolean(connector.lastError));
+const connectorStates = new Map([
+  ["active", "Active"], ["pending", "Pending"], ["error", "Error"],
+  ["globally-disabled", "Globally disabled"], ["repository-disabled", "Repository disabled"],
+  ["duplicate-port", "Port conflict"],
+]);
+
+function dockerConnectorRow(item) {
+  const failed = item.state === "error" || item.state === "duplicate-port";
+  const style = failed ? "bad" : item.active ? "ok" : "warn";
+  const state = connectorStates.get(item.state) || item.state || "—";
+  const tls = escapeHtml(item.tlsBundle || "");
+  const certificate = item.certificateFingerprint && tls
+    ? `<details class="docker-tls"><summary><span>TLS configuration</span> <code>${tls}</code></summary>
+        <span>Certificate fingerprint</span><code data-i18n-skip>${escapeHtml(item.certificateFingerprint)}</code></details>`
+    : tls && `<small class="docker-tls"><span>TLS configuration</span> <code>${tls}</code></small>`;
+  return `<tr role="row">
+    <td role="cell" class="docker-repo-cell"><strong data-i18n-skip>${escapeHtml(item.repositoryName)}</strong><small class="docker-repo-type" data-i18n-skip>${escapeHtml(lowerOrEmpty(item.repositoryType))}</small></td>
+    <td role="cell" class="docker-listener-cell"><code>${escapeHtml((item.scheme || "http").toUpperCase())} ${escapeHtml(item.port ?? "—")}</code>${certificate}</td>
+    <td role="cell" class="docker-url-cell"><span class="docker-url-label" aria-hidden="true">Public URL</span>${item.publicUrl ? `<code>${escapeHtml(item.publicUrl)}</code>` : '<span class="docker-url-unset">Not set</span>'}</td>
+    <td role="cell" class="docker-state-cell"><span class="state-badge compact ${style}">${escapeHtml(state)}</span></td>
+  </tr>`;
 }
 
-function renderDockerOperationsError(message) {
-  document.getElementById("docker-connector-summary").innerHTML = card("Status", "Failed");
-  document.getElementById("docker-connector-table").innerHTML =
-      `<tr><td colspan="6" class="empty-cell">${escapeHtml(message || "Docker operations request failed.")}</td></tr>`;
-  document.getElementById("docker-transfer-summary").innerHTML = "";
+function renderDockerOperations(snapshot, requestError = "") {
+  const connector = snapshot?.connector;
+  const transfer = snapshot?.transfer;
+  const connectors = connector?.connectors || [];
+  const active = connectors.filter(item => item.active).length;
+  const summary = document.getElementById("docker-connector-summary");
+  if (connector) {
+    summary.innerHTML = `<span>${connector.enabled ? "Enabled" : "Disabled"}</span> · <span>Active ports</span> ${active} / ${connectors.length}`;
+  } else {
+    summary.textContent = requestError ? "Failed" : "Loading…";
+  }
+  const error = requestError || connector?.lastError || "";
   const status = document.getElementById("docker-operations-status");
-  status.textContent = message || "";
-  status.classList.add("error");
+  status.textContent = error;
+  status.hidden = !error;
+  const emptyMessage = connector ? "No Docker connector ports configured." : requestError ? "Failed" : "Loading…";
+  document.getElementById("docker-connector-table").innerHTML = connectors.length
+    ? connectors.map(dockerConnectorRow).join("")
+    : `<tr role="row"><td role="cell" colspan="4" class="empty-cell">${emptyMessage}</td></tr>`;
+
+  for (const [direction, current, limit] of [
+    ["uploads", transfer?.activeUploads, transfer?.maxConcurrentUploads],
+    ["downloads", transfer?.activeDownloads, transfer?.maxConcurrentDownloads],
+  ]) {
+    document.getElementById("docker-active-" + direction).textContent = current ?? "—";
+    document.getElementById("docker-max-" + direction).textContent = limit === 0 ? "Unlimited" : limit ?? "—";
+  }
+  const refreshed = formatInstant(connector?.refreshedAt);
+  document.getElementById("docker-last-sync").innerHTML = refreshed
+    ? `<span>Last refreshed</span> · <time datetime="${escapeHtml(connector.refreshedAt)}">${escapeHtml(new Date(connector.refreshedAt).toLocaleTimeString())}</time>` : "";
+  document.getElementById("docker-node-id").textContent = connector?.nodeId || "—";
+  document.getElementById("docker-sequence").textContent = connector?.sequence ?? "—";
+  document.getElementById("docker-refreshed-at").textContent = refreshed || "—";
+  document.getElementById("docker-runtime-errors").textContent = connector ? (connector.lastError ? "Yes" : "No") : "—";
 }
 
 async function refreshDockerConnectors() {
@@ -111,11 +120,13 @@ async function refreshDockerConnectors() {
       cache: "no-store",
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    dockerOperations = await response.json();
-    renderDockerOperations(dockerOperations);
+    const snapshot = await response.json();
+    ++dockerLoadVersion;
+    renderDockerOperations(snapshot);
     showToast("Docker connectors refreshed.", "ok");
   } catch (error) {
-    renderDockerOperationsError(error.message);
+    ++dockerLoadVersion;
+    renderDockerOperations(null, error.message || "Docker connector refresh failed.");
     showToast(error.message || "Docker connector refresh failed.", "error");
   } finally {
     button.disabled = false;
@@ -124,6 +135,12 @@ async function refreshDockerConnectors() {
 
 async function clearDockerCache() {
   const button = document.getElementById("docker-cache-clear-button");
+  if (!await window.kkrepoConfirmDelete({
+    title: "Clear cache for all Docker repositories?",
+    description: "Invalidate cached content lookups and metadata across all Docker repositories.",
+    warning: "Cached misses are cleared too. Stored images and tags are preserved.",
+    confirmLabel: "Clear Docker cache",
+  })) return;
   button.disabled = true;
   try {
     const response = await fetch("/internal/docker/cache/clear", {
@@ -133,7 +150,7 @@ async function clearDockerCache() {
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const payload = await response.json();
-    showToast(`Docker cache cleared for ${payload.repositories ?? 0} repositories.`, "ok");
+    showToast(`Docker repositories with cache cleared: ${payload.repositories ?? 0}`, "ok");
     await loadDockerOperations();
   } catch (error) {
     showToast(error.message || "Docker cache clear failed.", "error");
