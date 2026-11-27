@@ -9,70 +9,49 @@
 
 [English](README.md) | **中文**
 
-kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
+kkRepo 是一个由社区驱动的开源、自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。
 
-## 功能特性
+你可以用它发布私有包、缓存上游依赖，也可以把已有的 Sonatype Nexus Repository 仓库迁入 kkRepo。支持 Maven、npm、Docker/OCI 等 24 种格式。
 
-- 支持 24 种仓库格式，各格式的 hosted、proxy 和 group 支持范围有所不同。
-- 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
-- Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
-- 支持制品安全扫描，包括 CycloneDX SBOM 生成、已知漏洞匹配、策略与豁免管理，以及可选的下载阻断。
-- 支持丰富的制品清理策略，提供企业级制品生命周期管理。
-- 兼容 Sonatype Nexus API 协议、用户权限模型、和 `/repository/<repo>/...` URL 布局。
-- 可使用 kkRepo 平替 Sonatype Nexus，支持存量数据一键迁移并沿用原仓库域名和 URL，原有客户端配置与 CI 工作流无需改动。
-- 支持完整的身份与访问控制，覆盖 Local、LDAP、OIDC 认证、匿名访问策略和细粒度权限管理。
-- 支持完整的可观测性，包括 Prometheus 指标导出、提供 Grafana 面板。
-- 使用 MySQL 或 PostgreSQL 存储元数据和共享运行状态；默认仍为 MySQL。
-- 支持 OSS/S3/File 存储制品 blob。
-- 支持多副本高可用部署。
+[为什么开发 kkRepo](docs/zh/why-kkrepo.md) · [快速开始](#快速开始) · [支持的仓库](#支持的仓库) · [核心特性](#核心特性) · [从 Nexus 迁移](#从-sonatype-nexus-repository-迁移) · [生产部署](docs/zh/build-deployment-guide.md)
 
-## 商标声明
-
-Sonatype、Nexus 和 Nexus Repository 是 Sonatype, Inc. 的商标。kkRepo 是独立开源项目，不隶属于 Sonatype, Inc.，也未获得其认可、赞助或背书。文档中对 Sonatype Nexus Repository 的引用仅用于准确说明兼容性、迁移或互操作性。
+![在 Browse 中查看制品的仓库路径、校验和及客户端用法](docs/img/img_1.png)
 
 ## 快速开始
 
-使用公开发行镜像和 MySQL 在本地启动一个试用环境：
+本地需要 Docker、Docker Compose 和 curl。在一个空目录中运行以下命令，启动 JVM 版 kkRepo 和 MySQL：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | bash
 ```
 
-使用同一镜像和默认 PostgreSQL 16 quickstart 启动（运行时兼容 PostgreSQL 12+）：
+### 上传第一个制品
+
+1. 打开[管理控制台](http://127.0.0.1:19090/admin/)，按提示为本地管理员 `admin` 设置密码。
+2. 在 **Blob Stores** 中创建名为 `default` 的 File 存储，供本地试用。
+3. 在 **Repositories** 中选择 `raw-hosted`，将仓库命名为 `raw-demo`，选择刚创建的存储并保存。
+
+下面的命令会提示输入管理员密码。先上传一行文本，再从相同地址读回：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
+url=http://127.0.0.1:19090/repository/raw-demo/hello.txt
+printf 'Hello, kkRepo!\n' > hello.txt
+curl --fail --user admin --upload-file hello.txt "$url"
+curl --fail --user admin "$url"
 ```
 
-如需从默认 JVM 镜像切换到多架构 Native 镜像：
+看到 `Hello, kkRepo!` 就完成了第一次制品发布和下载。也可以在[用户侧浏览器](http://127.0.0.1:19090/browse/)中打开 `raw-demo`，查看 `hello.txt` 的大小、校验和及下载地址。
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
-```
+<details>
+<summary>PostgreSQL、Native 镜像和健康检查</summary>
 
-`KKREPO_RUNTIME` 和 `KKREPO_DATABASE_TYPE` 可以独立选择，也可以组合使用，例如 `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`。
+默认组合是 JVM 和 MySQL。使用 PostgreSQL 时，在启动命令中将 `| bash` 改为 `| KKREPO_DATABASE_TYPE=postgresql bash`；使用 Native 镜像时改为 `| KKREPO_RUNTIME=native bash`。两个变量可以组合使用。
 
-启动后访问：
+[本地健康检查](http://127.0.0.1:19091/actuator/health) · [查看启动脚本](scripts/quickstart.sh) · [构建与部署指南](docs/zh/build-deployment-guide.md)
 
-- 管理控制台：`http://127.0.0.1:19090/admin/`
-- 用户侧浏览器：`http://127.0.0.1:19090/browse/`
-- 健康检查：`http://127.0.0.1:19091/actuator/health`
+</details>
 
-首次进入页面时，在 UI 中创建初始 `Local/admin` 管理员密码。quickstart 使用 File blob storage 作为本地试用存储；生产环境请改用 OSS/S3，并替换为自己的加密密钥。
-
-如果希望先检查脚本内容，可以先下载 `scripts/quickstart.sh`，确认后再用 `bash` 执行。
-
-## 构建和部署
-
-本地快速启动、Spring Boot 可执行 jar、Docker 镜像、压缩包、生产部署架构、资源规格和升级流程见 [构建部署指南](docs/zh/build-deployment-guide.md)。
-
-默认 JVM 与显式开启的 Native Image 在启动、内存、镜像体积和预热后吞吐方面的实测差异见 [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)。
-
-如果 kkRepo 部署在 Nginx 或其他 HTTPS 反向代理后面，请参考 [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)，确保 npm `dist.tarball` 等生成的仓库 URL 保持公网 `https://` scheme 和 host。
-
-本地开发热重载和测试说明见 [中文开发指南](docs/zh/development-guide.md)。
-
-## 支持能力
+## 支持的仓库
 
 | 格式 | Hosted | Proxy | Group | [Nexus 迁移](docs/zh/nexus-migration-guide.md) |
 | :--- | :---: | :---: | :---: | :---: |
@@ -103,116 +82,106 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 Nexus 迁移列的 ✓ 表示该格式有受支持的迁移路径。适用的仓库类型、数据范围和 Nexus 版本见迁移指南。
 
+## 核心特性
+
+- **制品分发。** Hosted 保存团队发布的制品；Proxy 按需缓存上游依赖；Group 为多个仓库提供统一的读取地址。各格式支持的组合见上表。
+- **代理流式下载。** 按仓库启用后，首次拉取未缓存的 Docker 镜像层、Maven 制品或 PyPI 包时，客户端可以在 kkRepo 从上游读取数据的同时开始下载。完整制品通过校验后才写入缓存。[支持的制品与启用条件](docs/zh/dev/proxy-streaming-downloads.md)
+- **下载卸载。** 对已存入 File Blob Store 的制品，kkRepo 完成鉴权和扫描策略检查后，可将完整文件下载交给 Nginx 等受信任的反向代理。大文件由代理直接发送，减少流经应用实例的数据量。[Nginx 下载卸载配置](docs/zh/nginx-reverse-proxy.md#下载卸载)
+- **身份与访问。** 支持本地账号、LDAP 和 OIDC，可通过角色分配仓库权限，为 CI 签发令牌，并配置匿名读取。[权限与认证](docs/zh/security-model.md)
+- **扫描与清理。** 可为选定仓库启用 SBOM 和漏洞扫描，按策略阻止下载或配置豁免；清理策略支持在删除前预览匹配的制品。[安全扫描](docs/zh/artifact-scanning-guide.md) · [清理策略](docs/zh/cleanup-policy-guide.md)
+- **多副本部署。** 副本通过 MySQL 或 PostgreSQL 共享元数据、会话和任务状态。生产环境可将制品存入 S3、阿里云 OSS 或 Azure Blob Storage。[部署架构](docs/zh/build-deployment-guide.md) · [Azure 存储](docs/zh/azure-blob-storage.md)
+
+默认发行版使用 JVM，也提供 Native 镜像。在 2 CPU、1 GiB 容器限制的本地基准中，Native 从创建容器到就绪的中位数为 **1.04 秒**，空闲容器内存中位数为 **170.4 MiB**。测试配置和预热后的吞吐量对比见 [Native 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)。
+
 ## 从 Sonatype Nexus Repository 迁移
 
-迁移入口在管理控制台 `/admin/`：
+kkRepo 团队迁移自己的制品仓库时保留了原域名，切换后 CI 继续使用已有的 Maven settings、npm registry 和 PyPI index URL。部署背景和切换结果见[团队迁移记录](docs/zh/why-kkrepo.md#迁移结果)。
 
-1. 在源 Sonatype Nexus Repository 部署中开启 Script REST API 脚本创建能力。
-2. 在 `Nexus Metadata` 页面先执行 `Run preflight`，确认无阻塞问题后执行 `Run migration`。
-3. 在 `Nexus Repository Data` 页面先执行 `Sync metadata` 迁移仓库元数据，再执行 `Sync packages` 迁移 blob 真实数据。
-4. 首次仓库数据迁移时 `Metadata since` 保持为空，扫描全量数据；后续迁移可以指定 `Metadata since` 做增量。
-5. 迁移完成后，把原制品仓库域名指向 kkRepo。非 Docker 客户端可以继续使用相同 `/repository/<repo>/...` URL；Docker 客户端应保持相同 `/v2/...` registry 入口、仓库名和 connector/path-based routing 形态。
+1. **确认范围并预检。** 核对源 Nexus 版本、仓库格式和要迁移的数据，在管理控制台的 **Nexus Metadata** 页面运行预检，处理报告中的阻塞项。
+2. **迁移配置和制品。** 先迁移用户、权限和仓库定义，再从 **Nexus Repository Data** 同步元数据和制品。首次执行全量同步；后续可增量同步，中断后可恢复。
+3. **验证并切换。** 用现有客户端验证权限和下载，再切换原域名。普通仓库沿用 `/repository/<repo>/...`；Docker/OCI 还需保留 `/v2/` 入口、仓库名和路由方式。
 
-迁移支持中断后继续，已迁移完成的数据会跳过。完整流程见 [Nexus 迁移说明](docs/zh/nexus-migration-guide.md)。
+![管理控制台中的 Nexus 仓库数据迁移任务及进度](docs/img/img_6.png)
 
-## 兼容与迁移背景
+[各格式迁移范围与前置条件](docs/zh/nexus-migration-guide.md) · [迁移实战手册](docs/zh/migration-playbook.md)
 
-| 维度 | Sonatype Nexus Repository OSS / Community Edition | kkRepo                                                                                                        |
-| --- | --- |-------------------------------------------------------------------------------------------------------------------|
-| 产品定位 | 通用制品仓库管理平台，功能完整，覆盖大量官方格式和管理能力 | 提供面向迁移的客户端行为、权限模型和 `/repository/<repo>/...` URL 布局兼容，同时采用共享关系数据库、OSS/S3-first、适合多副本部署的架构 |
-| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
-| 使用限制 | Community Edition 面向个人和小团队，官方限制为最多 40,000 components、100,000 requests/day；超过阈值后会暂停新增 component，直到用量回到限制以下 | 不内置 Community Edition 这类版本授权用量限制；容量边界由所选关系数据库、OSS/S3、运行副本数和部署规格决定，适合按实际业务规模扩容 |
-| 高可用部署 | 开源版适合单实例或基础 Kubernetes 部署；官方 HA deployment 属于 Pro 能力 | 从设计上默认支持多副本：session、认证 ticket、catalog 水位、锁、迁移进度和短生命周期协同状态都落 MySQL 或 PostgreSQL，进程内缓存只作为可重建热缓存 |
-| 稳定性和升级 | 版本边界复杂：3.70.x 是最后支持 OrientDB 的版本；3.71.0 起新安装默认 H2，但 H2 仍是内嵌数据库；Community Edition 到 3.77.0+ 才支持免费使用外部 PostgreSQL；3.88.0 起搜索才完全改为 SQL、替代 Elasticsearch。旧版 OrientDB/Elasticsearch/本地数据目录组合升级窗口重，文件损坏后恢复高度依赖备份、修复任务和人工介入 | 运行时支持 MySQL/PostgreSQL，不依赖 OrientDB 和内嵌 Elasticsearch；核心状态在共享关系数据库，blob 在 OSS/S3/File blob store，缓存和索引均可重建，更适合滚动升级、故障切换和数据恢复 |
-| 元数据存储 | 版本演进中经历 OrientDB、H2、PostgreSQL 等存储迁移路径，历史实例升级需要处理数据库迁移约束 | repository、component、asset、权限、token、审计、迁移状态和可重建索引在 MySQL 或 PostgreSQL 中使用显式表结构，便于排查、治理和横向扩展 |
-| blob 存储 | 常见部署使用本地文件 blob store，也可按版本和配置使用对象存储能力 | OSS/S3-first，同时保留 File blob store 用于开发测试；关系数据库只保存元数据、状态、索引和引用，不把大 blob 放进数据库 |
-| 搜索和索引 | 3.88.0 之前的 Nexus 搜索和索引基于内嵌 Elasticsearch，索引文件和数据库状态分离；索引损坏或不一致时需要依赖 Nexus 修复/重建任务处理 | 使用关系数据库反范式索引和协议派生元数据，browse/search/index 都按可重建数据设计，节点丢缓存不影响正确性                                              |
-| 架构复杂度 | Nexus Repository 功能复杂，覆盖大量通用管理能力和历史架构机制 | kkRepo 架构简单，只聚焦仓库管理和客户端协议实现                                                                                   |
-
-## 选型建议
-
-- 如果公司业务量非常小，仓库包数量和访问量都在 Community Edition 限制内，并且可以接受偶尔停机维护，Sonatype Nexus Repository 开源版本可能已经足够。
-- 如果对稳定性、扩展性和多副本部署要求较高，或者需要管理的包数量非常多，kkRepo 面向这类部署形态设计。
-- 如果存量 Sonatype Nexus Repository 实例在升级到新的 Community Edition 版本时遇到组件数量或日请求量限制问题，kkRepo 提供面向 0 停机迁移的一键迁移流程。
-
-## UI 展示
-
-### 前台
-
-前台面向制品使用者，提供仓库列表、包搜索、目录浏览、制品详情和上传入口。
-
-仓库列表展示 hosted、proxy、group 仓库的格式、状态和访问 URL，便于用户直接复制客户端配置地址。
+<details>
+<summary>更多 Browse 和 Admin 界面截图</summary>
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
-
 ![前台制品搜索](docs/img/img.png)
-
-目录浏览展示仓库路径树、制品摘要、checksum、content-type、更新时间和客户端使用片段。
-
-![前台目录浏览和制品详情](docs/img/img_1.png)
-
-上传页面提供按仓库选择文件和 asset path 的入口，用于 hosted 仓库的手工制品发布。
 
 ![前台制品上传](docs/img/img_2.png)
 
-### 后台
-
-后台面向仓库管理员，聚焦仓库配置、存储健康、安全配置、审计和迁移。
-
-Blob Store 页面支持 OSS Native SDK、AWS S3 SDK 和 File 引擎配置，并展示读写探测健康状态。
-
 ![后台 Blob Store 管理](docs/img/img_4.png)
-
-OIDC 页面管理 issuer、JWKS、client、scope、claim 映射和 token 校验参数，便于接入统一身份系统。
 
 ![后台 OIDC 配置](docs/img/img_3.png)
 
-Nexus Metadata 迁移入口用于迁移用户、角色、权限、blob store 和 repository 定义，并支持 preflight。
-
 ![后台 Nexus 元数据迁移](docs/img/img_5.png)
 
-Nexus Repository Data 迁移页面展示 hosted 仓库数据迁移任务、并发参数、进度统计、失败数量和仓库级明细。
+</details>
 
-![后台 Nexus 仓库数据迁移](docs/img/img_6.png)
+## 文档
 
-AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
+| 分类 | 推荐阅读 |
+| --- | --- |
+| 项目背景与实践 | [为什么开发 kkRepo](docs/zh/why-kkrepo.md) · [用户案例：一家光伏制造企业从 Nexus 迁移的经历](docs/zh/blog/nexus-to-kkrepo-migration-case.md) |
+| 架构与选型 | [架构设计](docs/zh/architecture.md) · [数据库后端](docs/zh/database-backends.md) · [数据库表结构](docs/zh/database-schema.md) · [MySQL 实体关系图](docs/zh/mysql-er.md) |
+| 兼容性与验证 | [格式兼容性矩阵](docs/zh/compatibility-matrix.md) · [如何对照 Nexus 做测试](docs/zh/nexus-compatibility-testing.md) · [Nexus REST API 对照分析（英文）](docs/en/dev/nexus-rest-api-alignment.md) |
+| 性能实测 | [Native 与 JVM 对比](docs/zh/native-vs-jvm-guide.md) · [代理流式下载](docs/zh/dev/proxy-streaming-performance.md) · [APT 与 Nexus 对比](docs/zh/dev/apt-performance-baseline.md) |
+| 仓库与客户端 | [各格式使用指南](docs/zh/repository-guides/README.md) · [客户端配置示例](docs/zh/client-recipes.md) · [搭建 Maven 私服](docs/zh/blog/setup-maven-private-repository-with-kkrepo.md) |
+| 从 Nexus 迁移 | [支持范围与前置条件](docs/zh/nexus-migration-guide.md) · [迁移实战手册](docs/zh/migration-playbook.md) |
+| 部署与运维 | [构建与部署](docs/zh/build-deployment-guide.md) · [生产加固](docs/zh/production-hardening.md) · [Nginx 反向代理](docs/zh/nginx-reverse-proxy.md) · [监控](docs/zh/monitoring-observability-guide.md) · [备份与恢复](docs/zh/backup-restore.md) |
+| 权限与制品治理 | [安全模型](docs/zh/security-model.md) · [内容选择器](docs/zh/content-selectors.md) · [制品扫描](docs/zh/artifact-scanning-guide.md) · [清理策略](docs/zh/cleanup-policy-guide.md) · [存储用量](docs/zh/admin-storage-usage.md) |
+| 排障与开发 | [常见问题](docs/zh/faq.md) · [故障排查](docs/zh/troubleshooting.md) · [开发指南](docs/zh/development-guide.md) |
 
 ## 路线图
 
-基础设施路线图：
+### 计划中
 
-1. ✅ PostgreSQL 数据库后端支持 - 已实现。通过 `persistence-jdbc` 公共契约、语义化 dialect SPI、backend 自有 Flyway migration、双库 contract test 和多副本 server smoke test 隔离并验证差异；MySQL 继续作为默认后端（[数据库后端指南](docs/zh/database-backends.md)、[设计方案](docs/zh/dev/pluggable-database-access-layer-design.md)）。
-2. ✅ 制品安全扫描 - 已实现，部署能力默认关闭；关闭时升级不处理历史制品，也不增加上传 outbox 写入。部署人员显式开启能力后，管理员仍需在 Admin UI 按仓库启用；此时上传事务只写通用制品变更 outbox，SBOM 与已知漏洞分析完全异步。同时覆盖 Docker/OCI 多平台、数据库持久任务、多副本协同、policy/waiver 评估和可选下载阻断（[使用指南](docs/zh/artifact-scanning-guide.md)、[设计说明](docs/zh/dev/security-scanning-design.md)）。
+- **Eclipse p2** — 代理 Eclipse 和 Equinox 的更新站点。
+- **CocoaPods** — 通过 Nexus 兼容的代理仓库获取 CocoaPods 依赖。
 
-仓库格式路线图：
+### 已交付
 
-1. ✅ Docker / OCI Registry - 已完成（[实现说明](docs/zh/dev/docker-repository-implementation-plan.md)）
-2. ✅ Cargo / Rust - 仓库能力已完成，包含搜索、UI/API 上传和迁移能力（[设计说明](docs/zh/dev/cargo-rust-repository-design.md)）
-3. ✅ Dart / Pub - 仓库能力已完成，包含 hosted/proxy/group、真实客户端 E2E、UI/API 上传、搜索和 Nexus 迁移能力（[设计说明](docs/zh/dev/dart-pub-repository-design.md)）
-4. ✅ Composer / PHP - hosted、proxy、group、UI/API 上传、搜索、真实客户端 E2E、强制 Nexus live 对比和显式选择的 Nexus proxy cache 迁移 E2E 已实现（[设计说明](docs/zh/dev/composer-php-repository-design.md)）
-5. ✅ Terraform Provider / Module Registry - hosted、proxy、group、Provider GPG 签名、Nexus 路径兼容、UI/API 上传、搜索、真实 Terraform CLI E2E、Nexus hosted 数据迁移和显式选择的 proxy cache 迁移已实现（[设计说明](docs/zh/dev/terraform-repository-design.md)）
-6. ✅ Swift Package Registry - hosted、GitHub-backed proxy、group、Registry v1、不可变签名发布、UI/API 上传、Browse/Search、多副本协同、真实 SwiftPM/Xcode E2E 和 shape-gated Nexus 3.92.x-3.94.x 迁移已实现（[设计说明](docs/zh/dev/swift-package-registry-design.md)）
-7. ✅ Ansible Galaxy - 已实现 Galaxy v3 hosted/proxy/group、collection 不可变发布、依赖解析、route-scoped Base64 Bearer/Ansible 2.9 Token 与 GenericToken 认证、UI/API 上传、Browse/Search、持久化多副本 import/proxy 协同、Ansible 2.9/当前版真实客户端 E2E、Nexus 黑盒兼容和 shape-gated Nexus 3.93.x-3.94.x 迁移（[使用指南](docs/zh/repository-guides/ansible-galaxy.md)、[设计说明](docs/zh/dev/ansible-galaxy-repository-design.md)）
-8. ✅ Conda - 已实现 hosted、proxy、group、`.tar.bz2`/`.conda` 发布、JSON/BZ2/ZSTD channel 元数据、UI/API 上传、Browse/Search、多副本协同、真实 Conda 客户端 E2E、Nexus 黑盒 fixture，以及 shape-gated Nexus 3.92.x-3.94.x hosted 数据迁移 E2E（[设计说明](docs/zh/dev/conda-repository-design.md)）
-9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[使用指南](docs/zh/repository-guides/apt-debian.md)、[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
-10. ✅ Conan 2 - 已实现 hosted/proxy/group、Conan bearer 认证、manifest-gated revision 发布、写入时 Nexus Browse 投影、UI/API 上传、Cleanup、复合 package 扫描、shape-gated 迁移、真实 Conan 客户端 E2E 和双数据库 Nexus 性能基线（[使用指南](docs/zh/repository-guides/conan-2.md)、[设计说明](docs/zh/dev/conan-repository-design.md)、[性能基线](docs/zh/dev/conan-performance-baseline.md)）
-11. ✅ Alpine / APK - 已实现 hosted/proxy/group、APK v2 package 校验、签名不可变 index、passthrough/验签后 re-sign proxy、有序 group source binding、UI/API 上传、Browse/Search、Cleanup、安全扫描、shape-gated Nexus 3.94 迁移、apk-tools 2.14/3.0 客户端 E2E 和可复现 Nexus 性能门槛（[使用指南](docs/zh/repository-guides/alpine-apk.md)、[设计说明](docs/zh/dev/alpine-apk-repository-design.md)、[性能基线](docs/zh/dev/alpine-performance-baseline.md)）
-12. ✅ Hugging Face Models - 已实现 Models-only proxy、commit-pinned metadata/file、服务端 LFS/Xet bridge、真实 Hub/Transformers/Diffusers 客户端、多副本 S3 协同、扫描、Cleanup 与 shape-gated Nexus 迁移（[使用指南](docs/zh/repository-guides/hugging-face-models.md)、[设计说明](docs/zh/dev/hugging-face-models-repository-design.md)、[性能基线](docs/zh/dev/hugging-face-models-performance-baseline.md)）。
-13. ✅ R / CRAN - 已实现 hosted/proxy/group、有界 source package 校验、确定性 `PACKAGES.gz`、延迟校验 proxy、snapshot-bound group、UI/API 上传、Browse/Search、Cleanup、partial-coverage 扫描、shape-gated Nexus 3.94 迁移、R 4.5/4.6 客户端 E2E、双数据库高效索引和可复现 Nexus 性能门禁（[使用指南](docs/zh/repository-guides/r-cran.md)、[设计说明](docs/zh/dev/r-cran-repository-design.md)、[性能基线](docs/zh/dev/r-cran-performance-baseline.md)）。
-14. ✅ Go - 已实现 hosted/proxy/group recipe、Nexus 兼容 module ZIP 发布、官方 path/version/archive 校验、有序 group 聚合、Cleanup、安全扫描、UI/API 上传、迁移、真实 Go 客户端 E2E、Nexus 3.94 黑盒对比和可复现性能基线（[使用指南](docs/zh/repository-guides/go.md)、[性能基线](docs/zh/dev/go-hosted-performance-baseline.md)）。
-15. ✅ OHPM / HarmonyOS - 已实现 hosted/proxy/group、普通与流式 HAR/HSP 发布、校验后缓存、UI/API 管理、可恢复独立导入及可选签名登录；真实客户端验收已接入既有 Full E2E 矩阵（[使用指南](docs/zh/repository-guides/ohpm.md)、[签名登录](docs/zh/dev/ohpm-login.md)、[测试覆盖与边界](docs/zh/dev/ohpm-acceptance.md)）。
-16. ✅ Helm group 仓库 - 已实现 hosted、proxy 与嵌套 group member 的配置顺序聚合、首成员优先、持久化 index 缓存、真实 Helm 客户端验证和 Nexus definition 迁移（[使用指南](docs/zh/repository-guides/helm.md)）。
-17. ✅ Git Large File Storage (LFS) - 已实现 hosted、Batch/basic/verify、完整性校验、OSS/S3 流式上传、多副本发布、权限及 Nexus 3.94 shape-gated 迁移；不提供 Git 服务、文件锁或自动 Cleanup（[使用指南](docs/zh/repository-guides/git-lfs.md)、[实现设计](docs/zh/dev/git-lfs-repository-design.md)）。
-18. Eclipse p2 - 规划 Nexus 兼容的 proxy 仓库，覆盖 Eclipse 与 Equinox update site。
-19. CocoaPods - 规划 Nexus 兼容的 proxy 仓库，用于代理 CocoaPods 依赖。
+| 平台能力 | 已交付内容 | 相关文档 |
+| --- | --- | --- |
+| PostgreSQL 后端 | 支持 MySQL 和 PostgreSQL，分别验证数据库升级与多副本运行。 | [数据库后端指南](docs/zh/database-backends.md) · [设计方案](docs/zh/dev/pluggable-database-access-layer-design.md) |
+| 制品安全扫描 | 按仓库启用异步 SBOM 和漏洞分析，可按策略阻止下载。 | [使用指南](docs/zh/artifact-scanning-guide.md) · [设计说明](docs/zh/dev/security-scanning-design.md) |
 
-用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。 OHPM 客户端使用 `GenericToken` 作为原始 Authorization 值；RSA 签名登录是默认关闭的可选功能。
+<details>
+<summary>仓库格式里程碑（17 项）</summary>
+
+| 仓库格式 | 已交付内容 | 相关文档 |
+| --- | --- | --- |
+| Docker / OCI | 镜像推送、拉取和上游缓存。 | [实现说明](docs/zh/dev/docker-repository-implementation-plan.md) |
+| Cargo / Rust | 支持 crate 发布、搜索和 Nexus 仓库迁移。 | [设计说明](docs/zh/dev/cargo-rust-repository-design.md) |
+| Dart / Pub | 支持包发布、搜索及 Nexus 迁移，并通过真实客户端验证。 | [设计说明](docs/zh/dev/dart-pub-repository-design.md) |
+| Composer / PHP | 支持 Composer 2 安装，以及显式选择的 Nexus 代理缓存迁移。 | [设计说明](docs/zh/dev/composer-php-repository-design.md) |
+| Terraform | 托管 Module 和 Provider，支持 Provider GPG 签名。 | [设计说明](docs/zh/dev/terraform-repository-design.md) |
+| Swift Package Registry | 支持签名发布和不可变版本，通过 SwiftPM 和 Xcode 验证。 | [设计说明](docs/zh/dev/swift-package-registry-design.md) |
+| Ansible Galaxy | 通过 Galaxy v3 发布 collection、解析依赖，并验证多副本导入。 | [使用指南](docs/zh/repository-guides/ansible-galaxy.md) · [设计说明](docs/zh/dev/ansible-galaxy-repository-design.md) |
+| Conda | 支持两种包格式，并生成 JSON、BZ2 和 ZSTD 格式的 repodata。 | [设计说明](docs/zh/dev/conda-repository-design.md) |
+| APT / Debian | 签名仓库元数据，通过真实 APT 客户端和 Nexus 对照验证。 | [使用指南](docs/zh/repository-guides/apt-debian.md) · [设计说明](docs/zh/dev/apt-debian-repository-design.md) · [性能基线](docs/zh/dev/apt-performance-baseline.md) |
+| Conan 2 | 支持包修订版发布、清理和复合包扫描。 | [使用指南](docs/zh/repository-guides/conan-2.md) · [设计说明](docs/zh/dev/conan-repository-design.md) · [性能基线](docs/zh/dev/conan-performance-baseline.md) |
+| Alpine / APK | 校验 APK v2 包，生成签名索引，支持代理重签。 | [使用指南](docs/zh/repository-guides/alpine-apk.md) · [设计说明](docs/zh/dev/alpine-apk-repository-design.md) · [性能基线](docs/zh/dev/alpine-performance-baseline.md) |
+| Hugging Face Models | 按提交版本代理模型文件，支持 LFS 和 Xet 下载。 | [使用指南](docs/zh/repository-guides/hugging-face-models.md) · [设计说明](docs/zh/dev/hugging-face-models-repository-design.md) · [性能基线](docs/zh/dev/hugging-face-models-performance-baseline.md) |
+| R / CRAN | 按包目录生成 PACKAGES.gz 索引，支持 R 客户端安装。 | [使用指南](docs/zh/repository-guides/r-cran.md) · [设计说明](docs/zh/dev/r-cran-repository-design.md) · [性能基线](docs/zh/dev/r-cran-performance-baseline.md) |
+| Go | 校验并发布 Go module ZIP，通过真实 Go 客户端验证。 | [使用指南](docs/zh/repository-guides/go.md) · [性能基线](docs/zh/dev/go-hosted-performance-baseline.md) |
+| OHPM / HarmonyOS | 支持流式 HAR/HSP 发布、可恢复导入及可选签名登录。 | [使用指南](docs/zh/repository-guides/ohpm.md) · [签名登录](docs/zh/dev/ohpm-login.md) · [测试覆盖与边界](docs/zh/dev/ohpm-acceptance.md) |
+| Helm Group | 支持嵌套仓库组，按配置顺序合并 chart 索引。 | [使用指南](docs/zh/repository-guides/helm.md) |
+| Git LFS | 支持 Batch、流式上传和对象校验，按仓库控制访问。 | [使用指南](docs/zh/repository-guides/git-lfs.md) · [实现设计](docs/zh/dev/git-lfs-repository-design.md) |
+
+</details>
+
+[完整版本记录](CHANGELOG.md)
 
 ## 谁在使用 kkRepo？
 
-如果你的公司、企业或组织正在使用 kkRepo，欢迎前往[用户登记 Issue](https://github.com/klboke/kkRepo/issues/93)留下部署信息。该 Issue 仅用于使用方登记；Bug 和功能建议请使用常规 Issue 模板提交。
+如果你的团队正在使用 kkRepo，欢迎在[用户登记 Issue](https://github.com/klboke/kkRepo/issues/93) 留下组织名称，简单说说你们怎么用它，例如从 Nexus 迁移，或第一次搭建私有制品仓库。你的分享能帮助正在选型的团队找到相似的使用场景，也能让维护者了解哪些团队在使用 kkRepo，以及他们的实际需求。
+
+该 Issue 专用于使用方登记。反馈 Bug 或提出功能建议，请使用[对应的 Issue 模板](https://github.com/klboke/kkRepo/issues/new/choose)。
 
 ## 参与贡献
 
@@ -252,31 +221,6 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 
-## 文档
+## 商标声明
 
-- [中文开发指南](docs/zh/development-guide.md)
-- [构建部署指南](docs/zh/build-deployment-guide.md)
-- [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
-- [Cleanup Policy 使用指南](docs/zh/cleanup-policy-guide.md)
-- [Browse 目录删除](docs/zh/browse-directory-deletion.md)
-- [管理后台存储用量](docs/zh/admin-storage-usage.md)
-- [仓库使用指南](docs/zh/repository-guides/README.md)
-- [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
-- [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)
-- [架构说明](docs/zh/architecture.md)
-- [兼容性矩阵](docs/zh/compatibility-matrix.md)
-- [排障指南](docs/zh/troubleshooting.md)
-- [生产加固指南](docs/zh/production-hardening.md)
-- [备份恢复指南](docs/zh/backup-restore.md)
-- [安全模型](docs/zh/security-model.md)
-- [内容选择器](docs/zh/content-selectors.md)
-- [MySQL ER 设计](docs/zh/mysql-er.md)
-- [数据库后端指南](docs/zh/database-backends.md)
-- [数据库 Schema](docs/zh/database-schema.md)
-- [Nexus 迁移说明](docs/zh/nexus-migration-guide.md)
-- [Nexus 迁移实战手册](docs/zh/migration-playbook.md)
-- [监控观测指南](docs/zh/monitoring-observability-guide.md)
-- [Nexus 兼容性测试说明](docs/zh/nexus-compatibility-testing.md)
-- [FAQ](docs/zh/faq.md)
-- [为什么开发 kkRepo](docs/zh/why-kkrepo.md)
-- [Changelog](CHANGELOG.md)
+Sonatype、Nexus 和 Nexus Repository 是 Sonatype, Inc. 的商标。kkRepo 是独立开源项目，不隶属于 Sonatype, Inc.，也未获得其认可、赞助或背书。文档中对 Sonatype Nexus Repository 的引用仅用于准确说明兼容性、迁移或互操作性。
