@@ -82,6 +82,11 @@ public class RepositoryDaoAdapter implements RepositoryDao {
   }
 
   @Override
+  public List<DockerConnectorRepository> listDockerConnectorRepositories() {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public Map<Long, List<String>> listAllGroupMembers() {
     throw new UnsupportedOperationException();
   }

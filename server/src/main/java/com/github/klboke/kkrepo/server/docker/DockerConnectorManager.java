@@ -1,8 +1,7 @@
 package com.github.klboke.kkrepo.server.docker;
 
-import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.DockerConnectorRepository;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -89,12 +88,15 @@ public class DockerConnectorManager {
         maxConcurrentDownloads);
   }
 
+  Snapshot emptySnapshot() {
+    return new Snapshot(connectorEnabled, Map.of(), List.of(), tuning(), Instant.now(), 0);
+  }
+
   private Snapshot loadSnapshot() {
     Map<Integer, String> ports = new LinkedHashMap<>();
     List<ConnectorStatus> connectors = new ArrayList<>();
-    for (RepositoryRecord record : repositoryDao.list()) {
-      DockerSettings settings = dockerSettings(record);
-      if (settings == null) continue;
+    for (DockerConnectorRepository record : repositoryDao.listDockerConnectorRepositories()) {
+      DockerSettings settings = dockerSettings(record.settings());
       addConnector(record, settings.connectorEnabled(), settings.connectorPort(), "http", null,
           settings.connectorPublicUrl(), ports, connectors);
       addConnector(record, settings.httpsConnectorEnabled(), settings.httpsConnectorPort(), "https",
@@ -112,7 +114,7 @@ public class DockerConnectorManager {
         refreshSequence.incrementAndGet());
   }
 
-  private void addConnector(RepositoryRecord record, boolean enabled, Integer port, String scheme,
+  private void addConnector(DockerConnectorRepository record, boolean enabled, Integer port, String scheme,
       String bundle, String publicUrl, Map<Integer, String> ports, List<ConnectorStatus> connectors) {
     if (port == null) return;
     boolean configured = connectorEnabled && enabled;
@@ -123,14 +125,7 @@ public class DockerConnectorManager {
         false, connectorState(enabled, conflict), scheme, bundle, null));
   }
 
-  static DockerSettings dockerSettings(RepositoryRecord record) {
-    if (record == null || record.format() != RepositoryFormat.DOCKER || record.attributes() == null) {
-      return null;
-    }
-    Object raw = record.attributes().get("docker");
-    if (!(raw instanceof Map<?, ?> docker)) {
-      return null;
-    }
+  private static DockerSettings dockerSettings(Map<String, Object> docker) {
     Integer port = parsePort(docker.get("connectorPort"));
     Boolean enabled = parseBoolean(docker.get("connectorEnabled"));
     if (enabled == null) {

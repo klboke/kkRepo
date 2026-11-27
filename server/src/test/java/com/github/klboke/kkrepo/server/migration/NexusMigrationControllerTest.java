@@ -1,11 +1,14 @@
 package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -19,6 +22,7 @@ import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMi
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationValidation;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.RepositoryMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusUserTokenReport;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -39,11 +43,15 @@ import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
+import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.channels.UnresolvedAddressException;
 import java.util.Arrays;
 import java.util.List;
@@ -277,6 +285,87 @@ class NexusMigrationControllerTest {
     assertEquals(
         List.of("docker-proxy", "docker-proxy-extra"),
         method.invoke(null, command.backupProxyRepositories(), command.backupProxyRepositoryNames()));
+  }
+
+  @Test
+  void preflightReportsNexusProUserTokensFromTheSourceWithoutSecrets() throws Exception {
+    ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    String alicePair = "AliceName1:" + "p".repeat(44);
+    String bobPair = "BobNameCd2:" + "q".repeat(44);
+    String legacyCiphertext = "{b7wqvCyGAOYGfIXc0dmM3zNRpFR6Lq3eDOn9X1zB2Mw=}";
+    String securityExport = mapper.writeValueAsString(Map.of(
+        "users", List.of(),
+        "apiKeys", List.of(
+            sourceApiKey("NpmToken", "alice", "NexusAuthenticatingRealm", "npm-secret"),
+            sourceApiKey("User-Token-Realm", "alice", "NexusAuthenticatingRealm", alicePair),
+            sourceApiKey("User-Token-Realm", "bob", "LdapRealm", bobPair)),
+        // alice owns source API keys; the ciphertext is how an encrypted user_name column reads over JDBC.
+        "legacyUserTokens", Map.of("count", 3, "users", List.of("alice", legacyCiphertext)),
+        "warnings", List.of()));
+    HttpServer nexus = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+    nexus.createContext("/", exchange -> {
+      String method = exchange.getRequestMethod();
+      String path = exchange.getRequestURI().getPath();
+      int status = 200;
+      String body;
+      if ("POST".equals(method) && path.startsWith("/service/rest/v1/script/kkrepo-security-export-")) {
+        body = mapper.writeValueAsString(Map.of("name", "security-export", "result", securityExport));
+      } else if (("POST".equals(method) && "/service/rest/v1/script".equals(path)) || "DELETE".equals(method)) {
+        status = 204;
+        body = "";
+      } else if ("/service/rest/v1/status".equals(path)) {
+        body = "{\"version\":\"3.77.2-02\"}";
+      } else if ("/service/rest/v1/security/anonymous".equals(path)) {
+        body = "{}";
+      } else if ("GET".equals(method) && path.startsWith("/service/rest/v1/")) {
+        body = "[]";
+      } else {
+        status = 404;
+        body = "{}";
+      }
+      byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(status, status == 204 ? -1 : bytes.length);
+      if (status != 204) {
+        exchange.getResponseBody().write(bytes);
+      }
+      exchange.close();
+    });
+    nexus.start();
+    try {
+      NexusMigrationController controller = new NexusMigrationController(
+          mapper, new StubBlobStoreDao(defaultBlobStore()), null, null, null, null, new AllowingSecurityService(),
+          null, null, null, null, null, null, null, null, null, null, null, null);
+      MockHttpServletRequest request = new MockHttpServletRequest("POST", "/internal/migration/nexus/preflight");
+      request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, adminSubject());
+
+      NexusMigrationPreflight preflight = controller.preflight(new NexusMigrationController.NexusMigrationCommand(
+          "http://127.0.0.1:" + nexus.getAddress().getPort() + "/", "admin", "secret", null, null, "3.77.2-02",
+          false), request);
+
+      NexusUserTokenReport userTokens = preflight.security().userTokens();
+      assertEquals(2, userTokens.tokens());
+      assertEquals(List.of("LDAP/bob", "Local/alice"), userTokens.owners());
+      assertEquals(3, userTokens.legacyTableTokens());
+      assertEquals(List.of("alice"), userTokens.legacyTableOwners());
+      assertTrue(userTokens.legacyTableOwnersUnverified());
+      assertEquals(1, preflight.security().apiKeys());
+      assertEquals("NpmToken", preflight.security().apiKeyDetails().getFirst().domain());
+      String json = mapper.writeValueAsString(preflight);
+      assertTrue(json.contains("\"owners\":[\"LDAP/bob\",\"Local/alice\"]"), json);
+      for (String secret : List.of(alicePair, bobPair, "AliceName1", "BobNameCd2", legacyCiphertext)) {
+        assertFalse(json.contains(secret), secret);
+      }
+    } finally {
+      nexus.stop(0);
+    }
+  }
+
+  private static Map<String, Object> sourceApiKey(String domain, String userId, String realm, String rawKey) {
+    return Map.of(
+        "domain", domain,
+        "api_key", rawKey,
+        "primary_principal", userId,
+        "principals", Map.of("primaryPrincipal", userId, "realmNames", List.of(realm)));
   }
 
   @Test

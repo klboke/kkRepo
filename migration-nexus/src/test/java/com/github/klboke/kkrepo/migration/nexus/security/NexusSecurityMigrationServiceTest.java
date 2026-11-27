@@ -99,6 +99,27 @@ class NexusSecurityMigrationServiceTest {
   }
 
   @Test
+  void neverImportsUserTokensOrDomainsTheDatabaseCouldFoldIntoOne() {
+    RecordingWriter writer = new RecordingWriter();
+    NexusSecurityMigrationService service =
+        new NexusSecurityMigrationService(new NexusSecurityRecordMapper(), writer);
+    String chosenPair = "ABCDEFGHJK:" + "a".repeat(43);
+    List<NexusApiKey> apiKeys = new ArrayList<>();
+    apiKeys.add(new NexusApiKey("NpmToken", "default", "carol", "npm-secret", null, "ACTIVE"));
+    for (String domain : List.of("UserToken", "usertoken", " USERTOKEN ", "User-Token-Realm", "user-token-realm",
+        "Us\u00e9rToken",
+        "\uFF35\uFF53\uFF45\uFF52\uFF34\uFF4F\uFF4B\uFF45\uFF4E", "Npm Token", "")) {
+      apiKeys.add(new NexusApiKey(domain, "default", "carol", chosenPair, null, "ACTIVE"));
+    }
+
+    NexusSecurityMigrationResult result = service.migrate(new NexusSecurityMigrationBatch(
+        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), apiKeys, null));
+
+    assertEquals(List.of("api-key:NpmToken/carol"), writer.operations);
+    assertEquals(1, result.apiKeys());
+  }
+
+  @Test
   void skipsRealmConfigWhenSourceDidNotProvideRealmOrder() {
     RecordingWriter writer = new RecordingWriter();
     NexusSecurityMigrationService service =

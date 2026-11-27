@@ -5,7 +5,7 @@
   // Resolve only after an explicit confirmation. Navigation, Escape and duplicate
   // requests cancel; callers retain their existing authorization and DELETE logic.
   window.kkrepoConfirmDelete = function ({ title, description, details = [], confirmationText, confirmLabel = "Delete",
-    warning = "Deletion is permanent. This action cannot be undone." } = {}) {
+    cancelLabel = "Cancel", warning = "Deletion is permanent. This action cannot be undone." } = {}) {
     if (active) return Promise.resolve(false);
     active = true;
     const trigger = document.activeElement;
@@ -46,7 +46,7 @@
       input.required = true;
     }
     const actions = add("div", form, null, "kk-confirm-actions");
-    const cancel = add("button", actions, "Cancel", "kk-confirm-cancel");
+    const cancel = add("button", actions, cancelLabel, "kk-confirm-cancel");
     cancel.type = "button";
     cancel.autofocus = true;
     const confirm = add("button", actions, confirmLabel, "kk-confirm-delete");

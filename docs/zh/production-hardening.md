@@ -234,12 +234,16 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 对 Terraform 上传 hosted module/provider，并使用 Terraform 0.13 与当前稳定版从 group 执行 `terraform init`；验证 proxy Provider、SHA256SUMS、detached signature、lock file，以及诊断信息中的 URL token 脱敏。
 - 对 Ansible 使用 2.9 和当前 ansible-core 构建/发布 collection，再通过 group 安装其依赖；验证重复版本拒绝、proxy install、artifact SHA-256、import task 恢复和另一副本读取。
 
+从 1.4.0 升级时，请先停止所有 1.4.0 副本，再启动新版本。新版本会在启动时使用当前配置的 `kkrepo.security.encryption.credential-secret` 重新加密受影响的仓库代理凭据。旧副本仍可能使用旧密钥读写同一批凭据。
+
 推荐发布流程：
 
 1. 先部署一个新副本。
 2. 验证 health、admin UI、browse UI 和核心仓库。
 3. 滚动升级剩余副本。
 4. 保留上一版本 artifact/image 以便回滚。
+
+CLI user token：请在所有副本都升级到支持它的版本之后，再开始签发（Browse > **My Token**，`UserToken` 域）。旧版本副本不会把 user token 限制为只能用于 HTTP Basic，也不会检查使重置在所有副本上撤销 Docker 和 Conan bearer token 的 key generation。回滚时同理：请在回滚前或回滚后立即删除已有的 user token。
 
 如果已经执行数据库 migration，回滚可能需要恢复数据库，而不仅仅是重新部署旧镜像。数据库专有恢复命令见[数据库后端](database-backends.md)。
 
