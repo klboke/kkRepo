@@ -93,7 +93,13 @@ try {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (...args) {
       const animation = animate.apply(this, args);
-      if (this.classList.contains("workspace-marker")) window.workspaceSwitchAnimated = true;
+      if (this.classList.contains("workspace-marker")) {
+        window.workspaceSwitchAnimated = true;
+        const frames = animation.effect.getKeyframes();
+        const midpoint = frames.find(frame => frame.computedOffset === 0.5);
+        window.workspaceSwitchHasPulse = midpoint?.clipPath && midpoint.clipPath !== frames[0].clipPath
+          && frames.at(-1).clipPath === frames[0].clipPath;
+      }
       return animation;
     };
   });
@@ -145,6 +151,7 @@ try {
     releaseBrowse();
   }
   await expect.poll(() => page.evaluate(() => window.workspaceSwitchAnimated)).toBe(true);
+  assert.equal(await page.evaluate(() => window.workspaceSwitchHasPulse), true, "The underline peaks halfway and finishes flat");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await workspaces.getByRole("link", { name: "Admin" }).press("Enter");
   await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Admin");

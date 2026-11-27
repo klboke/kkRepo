@@ -51,8 +51,16 @@
     const end = marker.getBoundingClientRect();
     if (reducedMotion.matches || !end.width || !marker.animate) return;
     const from = `translate(${start.left - end.left}px, ${start.top - end.top}px) scaleX(${start.width / end.width})`;
-    animation = marker.animate([{ transform: from }, { transform: "none" }], {
-      duration: 200, easing: "cubic-bezier(.2,.75,.25,1)",
-    });
+    const flat = "var(--workspace-line-flat)";
+    marker.classList.add("is-moving");
+    // One timeline keeps the crest at the midpoint of travel in both directions.
+    animation = marker.animate([
+      { transform: from, clipPath: flat },
+      { offset: 0.15, clipPath: flat },
+      { offset: 0.5, clipPath: "var(--workspace-line-peak)" },
+      { offset: 0.85, clipPath: flat },
+      { transform: "none", clipPath: flat },
+    ], { duration: 220, easing: "ease-in-out" });
+    animation.onfinish = animation.oncancel = () => marker.classList.remove("is-moving");
   }, { once: true });
 })();
