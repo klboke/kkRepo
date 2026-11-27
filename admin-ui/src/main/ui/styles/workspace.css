@@ -1,5 +1,3 @@
-.side-nav .side-group { height: 30px; color: var(--ink-3); letter-spacing: .05em; font-size: 10px; }
-.side-nav .side-group.is-current.is-open { color: var(--brand-strong); background: transparent; }
 .side-nav .side-item { height: 34px; }
 .view > .nx-table-frame { margin: 0 0 24px; }
 .action-bar, .table-tools { align-items: center; flex-wrap: wrap; gap: 8px; }

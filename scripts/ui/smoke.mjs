@@ -157,6 +157,16 @@ try {
   assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), false, "Reduced motion switches immediately");
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await expect(page.locator("#repositories-view")).toBeVisible();
+  const repositoryGroup = page.locator('[data-side-group="repository"]');
+  const currentChild = page.locator('#side-group-repository-items .is-active');
+  await expect(currentChild).toBeVisible();
+  await repositoryGroup.press("Space");
+  await expect(repositoryGroup).toHaveAttribute("aria-expanded", "false");
+  await expect(repositoryGroup).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(repositoryGroup).toHaveCSS("box-shadow", "none");
+  await expect(repositoryGroup).toHaveCSS("outline-style", "solid");
+  await repositoryGroup.press("Enter");
+  await expect(currentChild).toBeVisible();
   const repositoryIcons = await page.locator("#side-group-repository-items .side-item-icon")
     .evaluateAll(icons => icons.map(icon => getComputedStyle(icon).maskImage));
   assert.ok(repositoryIcons.length > 0 && !repositoryIcons.includes("none"));

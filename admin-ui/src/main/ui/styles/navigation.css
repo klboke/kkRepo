@@ -16,32 +16,26 @@
 }
 
 .side-group {
+  height: 30px;
   justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
   padding: 0 12px;
-  color: #70807a;
+  color: var(--ink-3);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: var(--fw-bold);
-  letter-spacing: 0;
+  letter-spacing: .05em;
   text-transform: uppercase;
 }
 
 .side-group:hover {
-  background: #f3f8f5;
-  color: #344641;
+  background: var(--surface-sunken);
+  color: var(--ink-1);
 }
 
 .side-group.is-current {
-  background: #edf7f4;
-  color: var(--active);
-}
-
-.side-group.is-current:not(.is-open) {
-  background: var(--active);
-  color: var(--active-ink);
-  box-shadow: var(--shadow-nav);
+  color: var(--brand-strong);
 }
 
 .side-group-caret {
