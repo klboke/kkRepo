@@ -8,10 +8,12 @@
 .repository-name { font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
 #repositories-view .actions-column { white-space: nowrap; }
 .repository-more { min-width: 28px; font-weight: bold; letter-spacing: .04em; }
-.row-menu, .recipe-combobox-popover {
+.row-menu, .recipe-combobox-popover[popover] {
   position: fixed;
   inset: auto;
   margin: 0;
+}
+.row-menu, .recipe-combobox-popover {
   box-sizing: border-box;
   border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
@@ -21,7 +23,7 @@
   overflow: auto;
   z-index: 120;
 }
-.recipe-combobox-popover { width: max-content; min-width: min(240px, calc(100vw - 20px)); padding: 8px; }
+.recipe-combobox-popover[popover] { width: max-content; min-width: min(240px, calc(100vw - 20px)); }
 .recipe-combobox-popover:not([hidden]) { display: flex; flex-direction: column; }
 .recipe-combobox-search { flex: none; }
 .recipe-combobox-options { min-height: 0; overscroll-behavior: contain; }

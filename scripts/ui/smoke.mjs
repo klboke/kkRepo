@@ -158,6 +158,24 @@ try {
         [".cleanup-tabs", ".cleanup-tab-panel.is-active .nx-table-frame"], []);
     }
   }
+  await page.setViewportSize({ width: 1024, height: 620 });
+  await page.goto(origin + "/admin/#admin/system/download-offload");
+  await page.locator("#offload-enabled").check();
+  const preset = page.locator("#offload-method-trigger");
+  const options = page.locator("#offload-method-popover");
+  await preset.click();
+  await expect(options).toBeVisible();
+  const initialPreset = await preset.boundingBox();
+  const initialOptions = await options.boundingBox();
+  await page.locator(".nx-content").evaluate(content => content.scrollBy(0, 90));
+  const scrolledPreset = await preset.boundingBox();
+  const scrolledOptions = await options.boundingBox();
+  assert.ok(scrolledPreset.y < initialPreset.y, "The settings page scrolls");
+  assert.ok(Math.abs((scrolledOptions.y - initialOptions.y) - (scrolledPreset.y - initialPreset.y)) <= 1,
+    "Proxy preset options move with the trigger");
+  await preset.press("Escape");
+  await expect(options).toBeHidden();
+
   for (const view of ["search", "upload", "browse"]) {
     await page.goto(origin + "/browse/#browse/" + view);
     await expect(page.locator("#" + view + "-view")).toBeVisible();
