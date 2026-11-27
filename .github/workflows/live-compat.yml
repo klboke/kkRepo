@@ -367,6 +367,16 @@ jobs:
       - name: Prepare live compatibility fixtures
         run: scripts/ci/live-compat-setup.sh
 
+      - name: Exercise the packaged frontend in Chromium
+        if: matrix.database == 'mysql' && (matrix.shard == 'system' || matrix.shard == 'all')
+        working-directory: scripts/ui
+        env:
+          KKREPO_UI_PASSWORD: "12345678"
+        run: |
+          npm ci --no-audit --no-fund
+          npx --no-install playwright install --with-deps chromium
+          node smoke.mjs
+
       - name: Start trusted Swift HTTPS proxy
         if: env.LIVE_COMPAT_SUITE == 'swift' || (env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'swift' || matrix.shard == 'all'))
         shell: bash

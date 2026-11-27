@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function harness() {
   const fields = new Map();
@@ -20,14 +18,11 @@ function harness() {
     setCleanupFieldHelp() {}, cleanupSelectedRepositoryIds: () => [1],
     cleanupPolicyView: () => null, escapeHtml: value => String(value),
   };
-  vm.createContext(context);
-  for (const [start, end] of [['function cleanupRuleBadges(', 'function cleanupScheduleLabel('],
-    ['function cleanupRepositoryCandidates(', 'function cleanupVisibleRepositories('],
-    ['function refreshCleanupCapabilityHelp(', 'function setCleanupFieldHelp('],
-    ['function cleanupOptionalNumber(', 'async function saveCleanupPolicy('],
-    ['function cleanupRunRuleSnapshot(', 'function cleanupRunRepositorySnapshot(']]) {
-    vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), context);
-  }
+  declarations.context(context);
+  vm.runInContext(declarations(
+    "cleanupRuleBadges", "cleanupRepositoryCandidates", "refreshCleanupCapabilityHelp",
+    "cleanupOptionalNumber", "cleanupPolicyPayload", "cleanupRunRuleSnapshot",
+  ), context);
   element('cleanup-policy-format').value = 'maven2';
   element('cleanup-policy-mode').value = 'MAVEN_SNAPSHOT_BUILDS';
   element('cleanup-policy-retain-count').value = '5';

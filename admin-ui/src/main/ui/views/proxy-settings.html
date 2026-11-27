@@ -1,0 +1,62 @@
+        <section class="view system-settings-view" id="proxy-settings-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-route" aria-hidden="true"></span></span>
+            <h1>Proxy Settings</h1>
+            <span class="heading-copy">Configure the network proxy used to reach repository upstreams.</span>
+          </div>
+          <div class="proxy-settings-layout">
+            <form class="blobstore-form" id="system-proxy-form">
+              <div class="form-title">System proxy defaults</div>
+              <div class="field-label">
+                <label class="checkbox-field"><input id="system-proxy-enabled" type="checkbox"><span>Enable system proxy</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Applies to repositories that use system settings."
+                  data-tooltip="Applies to repositories that use system settings.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <fieldset id="system-proxy-fields" class="form-grid">
+                <legend class="sr-only">System proxy settings</legend>
+                <label><span>Proxy type</span><select id="system-proxy-type"><option value="HTTP">HTTP</option><option value="SOCKS">SOCKS5</option></select></label>
+                <label><span>Proxy host</span><input id="system-proxy-host" required placeholder="proxy.example.com" autocomplete="off"></label>
+                <label><span>Proxy port</span><input id="system-proxy-port" type="number" min="1" max="65535" required></label>
+                <label class="checkbox-field full-width"><input id="system-proxy-auth" type="checkbox"><span>Proxy requires authentication</span></label>
+                <label id="system-proxy-user-field"><span>Proxy username</span><input id="system-proxy-username" autocomplete="off"></label>
+                <label id="system-proxy-password-field"><span>Proxy password</span><input id="system-proxy-password" type="password" autocomplete="new-password"></label>
+                <label id="system-proxy-clear-field" class="checkbox-field"><input id="system-proxy-password-clear" type="checkbox"><span>Clear saved proxy password</span></label>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label for="system-proxy-bypass">Bypass hosts</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Matching hosts connect directly. Use *.example.com for subdomains."
+                      data-tooltip="Matching hosts connect directly. Use *.example.com for subdomains.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="proxy-settings-actions">
+                    <input id="system-proxy-bypass" type="text" placeholder="*.example.com" autocomplete="off">
+                    <button class="create-button secondary" id="system-proxy-add-host" type="button">Add</button>
+                  </div>
+                  <div class="proxy-settings-actions" id="system-proxy-bypass-hosts"></div>
+                </div>
+              </fieldset>
+              <p class="form-note" id="system-proxy-status" role="status"></p>
+              <div class="form-actions">
+                <button type="submit" class="create-button" id="system-proxy-save">Save settings</button>
+                <button type="button" class="create-button secondary" id="system-proxy-test">Test connection</button>
+              </div>
+            </form>
+            <aside class="blobstore-form">
+              <div class="form-title">Repository usage</div>
+              <dl class="proxy-settings-counts">
+                <div><dt><span class="state-badge compact ok">Use system settings</span></dt><dd id="system-proxy-count-inherit">–</dd></div>
+                <div><dt><span class="state-badge compact checking">Use repository settings</span></dt><dd id="system-proxy-count-override">–</dd></div>
+                <div><dt><span class="state-badge compact">Direct connection</span></dt><dd id="system-proxy-count-direct">–</dd></div>
+              </dl>
+              <div class="form-actions">
+                <button type="button" class="create-button secondary" id="system-proxy-list">View repository proxies</button>
+                <button type="button" class="create-button secondary" id="system-proxy-batch">Switch in bulk</button>
+              </div>
+            </aside>
+          </div>
+        </section>

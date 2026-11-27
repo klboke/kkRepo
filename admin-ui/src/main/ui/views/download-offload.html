@@ -1,0 +1,116 @@
+        <section class="view system-settings-view" id="download-offload-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-download" aria-hidden="true"></span></span>
+            <h1>Download Offload</h1>
+            <span class="heading-copy">Let a trusted proxy send files after kkRepo authorizes the download.</span>
+          </div>
+          <div class="proxy-settings-layout">
+            <form class="blobstore-form" id="offload-settings-form">
+              <div class="form-title" id="offload-settings-title">Settings</div>
+              <div class="field-label">
+                <label class="checkbox-field"><input type="checkbox" id="offload-enabled" disabled><span>Enable download offload</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="A trusted proxy can send eligible downloads from the selected File Blob Stores."
+                  data-tooltip="A trusted proxy can send eligible downloads from the selected File Blob Stores.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <fieldset class="form-grid offload-settings-fields" id="offload-fields" aria-labelledby="offload-settings-title" disabled>
+                <div class="form-field full-width">
+                  <span id="offload-method-label">Proxy preset</span>
+                  <div class="recipe-combobox offload-method-picker" id="offload-method-picker">
+                    <select id="offload-method" hidden aria-hidden="true" tabindex="-1"></select>
+                    <button class="recipe-combobox-trigger" id="offload-method-trigger" type="button" role="combobox"
+                      aria-haspopup="listbox" aria-expanded="false" aria-controls="offload-method-options"
+                      aria-labelledby="offload-method-label offload-method-value">
+                      <span class="recipe-combobox-value" id="offload-method-value"></span>
+                      <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                    </button>
+                    <div class="recipe-combobox-popover" id="offload-method-popover" hidden>
+                      <div class="recipe-combobox-options" id="offload-method-options" role="listbox"
+                        aria-labelledby="offload-method-label"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label id="offload-request-label">Proxy request header</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="The trusted proxy sets this header when forwarding requests to kkRepo."
+                      data-tooltip="The trusted proxy sets this header when forwarding requests to kkRepo.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <code id="offload-request" class="offload-request" aria-labelledby="offload-request-label"></code>
+                </div>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label for="offload-response-preview">kkRepo response header</label>
+                    <span class="field-help" id="offload-response-help" tabindex="0" role="note"
+                      aria-label="Controls the file location in the offload response header."
+                      data-tooltip="Controls the file location in the offload response header.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="form-grid offload-custom-response-fields" id="offload-custom-response-fields" hidden>
+                    <label><span>Response header name</span><input id="offload-response" maxlength="128" spellcheck="false"></label>
+                    <label>
+                      <span>File location format</span>
+                      <select id="offload-target" aria-describedby="offload-response-preview">
+                        <option value="internal-uri">Internal URI</option>
+                        <option value="absolute-path">Proxy-side absolute path</option>
+                      </select>
+                    </label>
+                  </div>
+                  <output class="offload-request" id="offload-response-preview">
+                    <code id="offload-response-line"></code>
+                  </output>
+                </div>
+              </fieldset>
+              <div class="offload-store-heading">
+                <div class="field-label">
+                  <strong id="offload-store-title">File Blob Stores</strong>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Downloads use the File Blob Store that holds the requested file, including in group repositories."
+                    data-tooltip="Downloads use the File Blob Store that holds the requested file, including in group repositories.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </div>
+                <span class="form-note" id="offload-store-count"></span>
+              </div>
+              <div class="nx-table-frame offload-stores">
+                <table class="nx-table" aria-labelledby="offload-store-title">
+                  <thead><tr><th scope="col"><input id="offload-select-all" type="checkbox" aria-label="Select all File Blob Stores" disabled></th>
+                    <th scope="col">Blob store</th><th scope="col">Repositories</th></tr></thead>
+                  <tbody id="offload-store-rows"></tbody>
+                </table>
+              </div>
+              <p class="form-note" id="offload-status" role="status"></p>
+              <div class="form-actions">
+                <button class="create-button" id="offload-save" type="submit" disabled>Save settings</button>
+                <button class="create-button secondary" id="offload-discard" type="button" disabled>Discard changes</button>
+              </div>
+            </form>
+            <aside class="blobstore-form">
+              <div class="form-title">Deployment</div>
+              <dl class="proxy-settings-counts offload-deployment-status">
+                <div><dt>Saved configuration</dt><dd id="offload-saved-state"></dd></div>
+                <div>
+                  <dt class="field-label">
+                    <span>Trusted proxies</span>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Configure kkrepo.download-offload.trusted-proxies (environment variable KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES) on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes."
+                      data-tooltip="Configure kkrepo.download-offload.trusted-proxies (environment variable KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES) on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </dt>
+                  <dd id="offload-trusted"></dd>
+                </div>
+              </dl>
+              <div class="form-actions">
+                <button class="create-button secondary" id="offload-example" type="button" disabled>View deployment example</button>
+                <button class="create-button secondary" id="offload-verify" type="button" disabled>Verify offload</button>
+              </div>
+            </aside>
+          </div>
+        </section>

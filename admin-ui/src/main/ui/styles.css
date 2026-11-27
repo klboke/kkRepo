@@ -1,0 +1,8 @@
+@import "./styles/shell.css";
+@import "./styles/forms.css";
+@import "./styles/navigation.css";
+@import "./styles/migration.css";
+@import "./styles/scanning.css";
+@import "./styles/security.css";
+@import "./styles/cleanup.css";
+@import "./styles/system.css";

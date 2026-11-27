@@ -1,20 +1,13 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
 function loadFileIconName() {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("const FILE_ICON_RULES");
-  const end = source.indexOf("const ICON_FOLDER", start);
-  assert.notEqual(start, -1, "FILE_ICON_RULES should exist");
-  assert.notEqual(end, -1, "file icon mapping block should have a stable boundary");
-  const context = vm.createContext({});
+
+  const context = declarations.context({});
   vm.runInContext(
-    `${source.slice(start, end)}\nglobalThis.fileIconName = fileIconName;`,
+    `${declarations("FILE_ICON_RULES", "fileIconName")}\nglobalThis.fileIconName = fileIconName;`,
     context,
   );
   return context.fileIconName;

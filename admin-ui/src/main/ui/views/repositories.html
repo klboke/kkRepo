@@ -1,0 +1,597 @@
+        <section class="view fixed-table-view" id="repositories-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-package" aria-hidden="true"></span></span>
+            <h1>Repositories</h1>
+            <span class="heading-copy">Manage repositories</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-repository-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create repository</button>
+            <label class="filter-box">
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+              <input id="repository-filter" type="search" placeholder="Filter">
+            </label>
+            <button class="create-button secondary" id="repository-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+            <label class="select-filter"><span>Blob store</span><select id="repository-store-filter" aria-label="Filter by blob store"><option value="">All blob stores</option></select></label>
+          </div>
+          <div class="usage-overview">
+            <div class="summary-grid" id="repository-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="repository-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching repositories</span><strong id="repository-usage-matching">0</strong></div>
+              <div><span class="field-label"><span>Asset Count</span><span class="field-help" tabindex="0" role="note" aria-label="Stored files in hosted and proxy repositories, including metadata and cached files. Group repositories are excluded from usage totals." data-tooltip="Stored files in hosted and proxy repositories, including metadata and cached files. Group repositories are excluded from usage totals."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="repository-usage-count">…</strong></div>
+              <div><span class="field-label"><span>Logical asset size</span><span class="field-help" tabindex="0" role="note" aria-label="Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories. Group repositories are excluded from usage totals." data-tooltip="Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories. Group repositories are excluded from usage totals."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="repository-usage-size">…</strong></div>
+            </div>
+          </div>
+          <div class="form-modal" id="repository-form-modal" data-form-id="repository-form" role="dialog" aria-modal="true" aria-labelledby="repository-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="repository-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="repository-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+          <form class="blobstore-form modal-form" id="repository-form" hidden novalidate>
+            <div class="form-title" id="repository-form-title">Create repository</div>
+            <div class="form-grid">
+              <div class="form-field repository-recipe-field">
+                <span id="repository-recipe-label">Recipe <span class="required-mark">*</span></span>
+                <div class="recipe-combobox" id="repository-recipe-combobox">
+                  <select id="repository-recipe" name="recipe" required hidden aria-hidden="true" tabindex="-1"></select>
+                  <button
+                      class="recipe-combobox-trigger"
+                      id="repository-recipe-trigger"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                      aria-controls="repository-recipe-options"
+                      aria-labelledby="repository-recipe-label repository-recipe-value">
+                    <span class="recipe-combobox-value" id="repository-recipe-value">Select a recipe</span>
+                    <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                  </button>
+                  <div class="recipe-combobox-popover" id="repository-recipe-popover" hidden>
+                    <input
+                        class="recipe-combobox-search"
+                        id="repository-recipe-search"
+                        type="search"
+                        placeholder="Filter recipes"
+                        role="combobox"
+                        aria-autocomplete="list"
+                        aria-controls="repository-recipe-options"
+                        aria-expanded="true"
+                        aria-label="Filter repository recipes"
+                        autocomplete="off">
+                    <div
+                        class="recipe-combobox-options"
+                        id="repository-recipe-options"
+                        role="listbox"
+                        aria-labelledby="repository-recipe-label"></div>
+                  </div>
+                </div>
+              </div>
+              <label>
+                <span>Name <span class="required-mark">*</span></span>
+                <input id="repository-name" name="name" type="text" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Blob store <span class="required-mark">*</span></span>
+                <select id="repository-blobstore" name="blobStoreName"></select>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-online" name="online" type="checkbox" checked>
+                <span>Online</span>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-strict" name="strictContentTypeValidation" type="checkbox" checked>
+                <span>Strict content type validation</span>
+              </label>
+            </div>
+            <fieldset class="form-grid" id="repository-raw-fields" hidden>
+              <legend>Raw settings</legend>
+              <label>
+                <span>Content disposition</span>
+                <select id="repository-raw-content-disposition">
+                  <option value="ATTACHMENT">Attachment</option>
+                  <option value="INLINE">Inline</option>
+                </select>
+                <small>Choose Inline to display HTML pages in the browser. Only use it for trusted content.</small>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-hosted-fields" hidden>
+              <legend>Hosted settings</legend>
+              <label id="repository-yum-depth-field" hidden>
+                <span>Repodata Depth</span>
+                <input id="repository-yum-depth" type="number" min="0" step="1" value="0">
+                <small>0 generates metadata at the repository root; 1 uses folders such as fedora-45. Changing the depth rebuilds metadata.</small>
+              </label>
+              <label>
+                <span>Write policy</span>
+                <select id="repository-write-policy">
+                  <option value="ALLOW">Allow redeploy</option>
+                  <option value="ALLOW_ONCE">Disable redeploy</option>
+                  <option value="DENY">Read-only</option>
+                </select>
+              </label>
+              <label class="maven-only">
+                <span>Version policy</span>
+                <select id="repository-version-policy">
+                  <option value="RELEASE">Release</option>
+                  <option value="SNAPSHOT">Snapshot</option>
+                  <option value="MIXED">Mixed</option>
+                </select>
+              </label>
+              <label class="maven-only">
+                <span>Layout policy</span>
+                <select id="repository-layout-policy">
+                  <option value="STRICT">Strict</option>
+                  <option value="PERMISSIVE">Permissive</option>
+                </select>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-proxy-fields" hidden>
+              <legend>Proxy settings</legend>
+              <label class="full-width"><span>Routing Rule</span><select id="repository-routing-rule"><option value="">None</option></select><span id="repository-routing-rule-status" role="status"></span></label>
+              <label>
+                <span class="field-label"><span id="repository-remote-url-label">Remote URL <span class="required-mark">*</span></span>
+                  <span id="repository-swift-proxy-help" class="field-help" tabindex="0" role="note" hidden
+                    aria-label="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS."
+                    data-tooltip="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-remote-url" type="url" aria-labelledby="repository-remote-url-label" placeholder="https://repo.maven.apache.org/maven2/">
+              </label>
+              <label id="repository-pypi-index-path-field" hidden>
+                <span class="field-label">Remote Index Path
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="PyPI proxy only. Use /simple for standard package indexes. Leave this empty when the upstream serves project indexes directly from its root, such as the PyTorch package indexes. Client URLs remain under /simple."
+                    data-tooltip="PyPI proxy only. Use /simple for standard package indexes. Leave this empty when the upstream serves project indexes directly from its root, such as the PyTorch package indexes. Client URLs remain under /simple.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-pypi-index-path" type="text" value="/simple"
+                  spellcheck="false" autocomplete="off" placeholder="/simple">
+              </label>
+              <label>
+                <span class="field-label">Allowed redirect host
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Optional. Cross-host redirects are denied by default. Enter an exact host name or a subdomain pattern such as *.quay.io (does not include quay.io). To allow more than one, separate hosts with commas. Source repository credentials are never forwarded, and outbound DNS and SSRF validation still applies. A standalone * opts into any public HTTPS destination for content GET/HEAD downloads, trusting the upstream to choose public destinations. Requires direct HTTPS transport; private addresses, downgrades, cross-origin credentials and cookies remain blocked. POST and token exchanges retain strict rules. Schemes, ports and paths are not allowed."
+                    data-tooltip="Optional. Cross-host redirects are denied by default. Enter an exact host name or a subdomain pattern such as *.quay.io (does not include quay.io). To allow more than one, separate hosts with commas. Source repository credentials are never forwarded, and outbound DNS and SSRF validation still applies. A standalone * opts into any public HTTPS destination for content GET/HEAD downloads, trusting the upstream to choose public destinations. Requires direct HTTPS transport; private addresses, downgrades, cross-origin credentials and cookies remain blocked. POST and token exchanges retain strict rules. Schemes, ports and paths are not allowed.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-allowed-redirect-hosts" type="text" spellcheck="false"
+                  autocomplete="off" placeholder="artifacts.example.com">
+              </label>
+              <label id="repository-remote-authentication-field" hidden>
+                <span>Upstream authentication</span>
+                <select id="repository-remote-authentication-type">
+                  <option value="auto">Basic / Bearer</option>
+                  <option value="ntlm">NTLM</option>
+                </select>
+              </label>
+              <label id="repository-remote-ntlm-domain-field" hidden>
+                <span>NTLM domain</span>
+                <input id="repository-remote-ntlm-domain" type="text" autocomplete="off" placeholder="DOMAIN">
+              </label>
+              <label id="repository-remote-ntlm-host-field" hidden>
+                <span>NTLM workstation (optional)</span>
+                <input id="repository-remote-ntlm-host" type="text" autocomplete="off">
+              </label>
+              <label>
+                <span>Remote username</span>
+                <input id="repository-remote-username" type="text" autocomplete="off">
+              </label>
+              <label>
+                <span>Remote password</span>
+                <input id="repository-remote-password" type="password" autocomplete="new-password">
+              </label>
+              <label>
+                <span>Remote bearer token</span>
+                <input id="repository-remote-bearer-token" type="password" autocomplete="new-password">
+              </label>
+              <label>
+                <span class="field-label"><span id="repository-content-max-age-label">Content max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-content-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-content-max-age-label">
+              </label>
+              <label>
+                <span class="field-label"><span id="repository-metadata-max-age-label">Metadata max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-metadata-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-metadata-max-age-label">
+              </label>
+              <label id="repository-minimum-release-age-field" hidden>
+                <span class="field-label"><span id="repository-minimum-release-age-label">Minimum release age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies."
+                    data-tooltip="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-minimum-release-age" type="number" min="0" value="0" aria-labelledby="repository-minimum-release-age-label">
+              </label>
+              <div class="checkbox-with-help" id="repository-streaming-field">
+                <label class="checkbox-field"><input id="repository-streaming-enabled" type="checkbox"><span>Allow streaming downloads</span></label>
+                <span class="field-help" tabindex="0" role="note" aria-label="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached." data-tooltip="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+              </div>
+              <label class="checkbox-field">
+                <input id="repository-auto-block" type="checkbox" checked>
+                <span>Auto-block remote</span>
+              </label>
+              <div class="checkbox-with-help" id="repository-block-outbound-field" hidden>
+                <label class="checkbox-field"><input id="repository-block-outbound" type="checkbox"><span>Block outbound connections</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Stop contacting the remote repository and serve only eligible cached content."
+                  data-tooltip="Stop contacting the remote repository and serve only eligible cached content.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <label class="checkbox-field">
+                <input id="repository-remote-password-clear" type="checkbox">
+                <span>Clear saved password</span>
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-remote-bearer-token-clear" type="checkbox">
+                <span>Clear saved bearer token</span>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-outbound-proxy-fields" hidden>
+              <legend>Outbound network proxy</legend>
+              <label class="full-width outbound-proxy-mode"><span>Proxy mode</span>
+                <select id="repository-outbound-proxy-mode">
+                  <option value="DIRECT">Direct connection</option>
+                  <option value="INHERIT">Use system settings</option>
+                  <option value="OVERRIDE">Use repository settings</option>
+                </select>
+              </label>
+              <label>
+                <span class="field-label"><span id="repository-outbound-proxy-type-label">Proxy type</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server."
+                    data-tooltip="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-outbound-proxy-type" aria-labelledby="repository-outbound-proxy-type-label">
+                  <option value="" disabled>Not configured</option>
+                  <option value="HTTP">HTTP</option>
+                  <option value="SOCKS">SOCKS</option>
+                </select>
+              </label>
+              <label>
+                <span>Proxy host</span>
+                <input id="repository-outbound-proxy-host" type="text" autocomplete="off"
+                  placeholder="192.168.1.10">
+              </label>
+              <label>
+                <span>Proxy port</span>
+                <input id="repository-outbound-proxy-port" type="number" min="1" max="65535"
+                  placeholder="7890">
+              </label>
+              <label>
+                <span>Proxy username</span>
+                <input id="repository-outbound-proxy-username" type="text" autocomplete="off">
+              </label>
+              <label>
+                <span>Proxy password</span>
+                <input id="repository-outbound-proxy-password" type="password" autocomplete="new-password">
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-outbound-proxy-password-clear" type="checkbox">
+                <span>Clear saved proxy password</span>
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-docker-fields" hidden>
+              <legend><span class="field-label"><span>Docker connector</span>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic."
+                  data-tooltip="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </span></legend>
+              <label class="checkbox-field">
+                <input id="repository-docker-connector-enabled" type="checkbox">
+                <span>Enable HTTP connector</span>
+              </label>
+              <label>
+                <span>Connector port <span class="required-mark">*</span></span>
+                <input id="repository-docker-connector-port" type="number" min="1" max="65535" placeholder="5000">
+              </label>
+              <label class="checkbox-field">
+                <input id="repository-docker-https-enabled" type="checkbox">
+                <span>Enable HTTPS connector</span>
+              </label>
+              <label>
+                <span>HTTPS connector port <span class="required-mark">*</span></span>
+                <input id="repository-docker-https-port" type="number" min="1" max="65535" placeholder="5443">
+              </label>
+              <label class="full-width">
+                <span class="field-label"><span>TLS configuration</span>
+                  <span id="docker-tls-help" class="field-help" tabindex="0" role="note"
+                    aria-label="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form."
+                    data-tooltip="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-docker-tls-bundle" list="docker-tls-bundles" placeholder="Default TLS configuration">
+                <datalist id="docker-tls-bundles"></datalist>
+              </label>
+              <label class="full-width">
+                <span class="field-label"><span>Public URL</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Optional shared external registry URL for both connectors, including a reverse-proxy address. Used in displayed URLs, copied Docker commands, and upload Location responses. It must be reachable by clients using either connector. HTTP and HTTPS can both listen on different ports. When empty, responses follow the request address; displayed URLs prefer HTTPS when enabled."
+                    data-tooltip="Optional shared external registry URL for both connectors, including a reverse-proxy address. Used in displayed URLs, copied Docker commands, and upload Location responses. It must be reachable by clients using either connector. HTTP and HTTPS can both listen on different ports. When empty, responses follow the request address; displayed URLs prefer HTTPS when enabled.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-docker-connector-public-url" type="url" placeholder="https://registry.example.com">
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-cargo-fields" hidden>
+              <legend>Cargo settings</legend>
+              <div class="checkbox-with-help">
+                <label class="checkbox-field">
+                  <input id="repository-cargo-require-authentication" type="checkbox">
+                  <span>Authentication requirements</span>
+                </label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges."
+                  data-tooltip="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-conan-limits" hidden>
+              <legend>Conan 2 settings</legend>
+              <label>
+                <span class="field-label">Manifest entry limit
+                  <span id="repository-conan-manifest-max-entries-help" class="field-help" tabindex="0" role="note"
+                    aria-label="Maximum entries in a manifest."
+                    data-tooltip="Maximum entries in a manifest.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-conan-manifest-max-entries" type="number" min="1" max="2147483647" step="1" placeholder="Inherit server default">
+              </label>
+              <label>
+                <span class="field-label">Manifest size limit (bytes)
+                  <span id="repository-conan-manifest-max-bytes-help" class="field-help" tabindex="0" role="note"
+                    aria-label="Maximum manifest text size in bytes, not the package archive size."
+                    data-tooltip="Maximum manifest text size in bytes, not the package archive size.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-conan-manifest-max-bytes" type="number" min="1" max="2147483646" step="1" placeholder="Inherit server default">
+              </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-conan-fields" hidden>
+              <legend>Conan 2 status</legend>
+              <p class="form-note full-width">
+                Repository contents and upload sessions. Refresh reloads these statistics.
+              </p>
+              <div class="full-width" id="repository-conan-operations">
+                <div class="muted-row" id="repository-conan-status">Conan status not loaded.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-conan-refresh-status" type="button">Refresh status</button>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-apt-fields" hidden>
+              <legend>APT / Debian settings</legend>
+              <label>
+                <span>Distribution</span>
+                <input id="repository-apt-distribution" type="text" value="stable" placeholder="stable">
+              </label>
+              <label>
+                <span>Default component <span class="required-mark">*</span></span>
+                <input id="repository-apt-component" type="text" value="main" placeholder="main">
+              </label>
+              <label>
+                <span>Architectures <span class="required-mark">*</span></span>
+                <input id="repository-apt-architectures" type="text" value="amd64" placeholder="amd64, arm64">
+              </label>
+              <label>
+                <span class="field-label"><span id="repository-apt-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified."
+                    data-tooltip="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-apt-metadata-mode" aria-labelledby="repository-apt-metadata-mode-label">
+                  <option value="PASSTHROUGH">Passthrough upstream signatures</option>
+                  <option value="RESIGN">Verify cache and sign locally</option>
+                </select>
+              </label>
+              <label>
+                <span>Valid-Until (days)</span>
+                <input id="repository-apt-valid-until-days" type="number" min="0" max="3650" value="30">
+              </label>
+              <label>
+                <span>Origin</span>
+                <input id="repository-apt-origin" type="text" value="kkRepo" maxlength="128">
+              </label>
+              <label>
+                <span>Label</span>
+                <input id="repository-apt-label" type="text" value="kkRepo" maxlength="128">
+              </label>
+              <label class="checkbox-field" id="repository-apt-flat-field">
+                <input id="repository-apt-flat" type="checkbox">
+                <span>Flat upstream layout</span>
+              </label>
+              <label class="checkbox-field" id="repository-apt-enforce-field">
+                <input id="repository-apt-enforce-distribution" type="checkbox">
+                <span>Enforce configured distribution</span>
+              </label>
+              <div class="full-width" id="repository-apt-operations" hidden>
+                <div class="muted-row" id="repository-apt-status">APT status not loaded.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-apt-refresh-status" type="button">Refresh status</button>
+                  <button class="create-button secondary" id="repository-apt-rebuild" type="button">Rebuild metadata</button>
+                </div>
+                <label class="full-width">
+                  <span>OpenPGP private signing key</span>
+                  <textarea id="repository-apt-private-key" rows="5" autocomplete="off" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK-----"></textarea>
+                </label>
+                <label>
+                  <span>Key passphrase</span>
+                  <input id="repository-apt-key-passphrase" type="password" autocomplete="new-password">
+                </label>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-apt-rotate-key" type="button">Import / rotate signing key</button>
+                  <button class="create-button secondary" id="repository-apt-generate-key" type="button">Generate / rotate signing key</button>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-alpine-fields" hidden>
+              <legend>APK / Alpine settings (APK v2)</legend>
+              <label>
+                <span>Distributions <span class="required-mark">*</span></span>
+                <input id="repository-alpine-distributions" type="text" value="v3.23" placeholder="v3.23, edge">
+              </label>
+              <label>
+                <span>Channels <span class="required-mark">*</span></span>
+                <input id="repository-alpine-channels" type="text" value="main" placeholder="main, community">
+              </label>
+              <label>
+                <span>Architectures <span class="required-mark">*</span></span>
+                <input id="repository-alpine-architectures" type="text" value="x86_64, aarch64" placeholder="x86_64, aarch64">
+              </label>
+              <label>
+                <span class="field-label"><span id="repository-alpine-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry."
+                    data-tooltip="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-alpine-metadata-mode" aria-labelledby="repository-alpine-metadata-mode-label">
+                  <option value="PASSTHROUGH">Passthrough upstream signature</option>
+                  <option value="RESIGN">Verify and sign locally</option>
+                </select>
+              </label>
+              <label>
+                <span>Public key filename</span>
+                <input id="repository-alpine-key-filename" type="text" value="kkrepo-alpine.rsa.pub" maxlength="192">
+              </label>
+              <label>
+                <span>Signature type</span>
+                <select id="repository-alpine-signature-type">
+                  <option value="RSA">RSA / SHA-1 compatibility</option>
+                  <option value="RSA256">RSA / SHA-256</option>
+                  <option value="RSA512">RSA / SHA-512</option>
+                </select>
+              </label>
+              <label class="full-width">
+                <span>Description</span>
+                <input id="repository-alpine-description" type="text" value="kkRepo Alpine repository" maxlength="255">
+              </label>
+              <label class="checkbox-field" id="repository-alpine-verify-field">
+                <input id="repository-alpine-verify-upstream" type="checkbox">
+                <span>Verify upstream index signature before projection</span>
+              </label>
+              <label class="checkbox-field" id="repository-alpine-stale-field">
+                <input id="repository-alpine-stale-if-error" type="checkbox" checked>
+                <span>Serve last verified index when upstream fails</span>
+              </label>
+              <label class="full-width" id="repository-alpine-upstream-key-field">
+                <span>Upstream trust entry</span>
+                <textarea id="repository-alpine-upstream-public-key" rows="5" autocomplete="off" placeholder="filename=upstream.rsa.pub&#10;-----BEGIN PUBLIC KEY-----"></textarea>
+              </label>
+              <div class="full-width" id="repository-alpine-operations" hidden>
+                <div class="muted-row" id="repository-alpine-status">Alpine status not loaded.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-alpine-refresh-status" type="button">Refresh status</button>
+                  <button class="create-button secondary" id="repository-alpine-rebuild" type="button">Rebuild index</button>
+                  <button class="create-button secondary" id="repository-alpine-download-key" type="button">Download public key</button>
+                </div>
+                <label class="full-width">
+                  <span>PKCS#8 RSA private key</span>
+                  <textarea id="repository-alpine-private-key" rows="5" autocomplete="off" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-alpine-rotate-key" type="button">Import / rotate signing key</button>
+                  <button class="create-button secondary" id="repository-alpine-generate-key" type="button">Generate / rotate signing key</button>
+                </div>
+              </div>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-group-fields" hidden>
+              <legend>Group members</legend>
+              <div class="full-width member-transfer" id="member-transfer">
+                <div class="member-pane" data-side="available">
+                  <div class="member-pane-head">
+                    <span class="member-pane-title">Available <span class="member-count" id="member-available-count">0</span></span>
+                  </div>
+                  <input type="search" class="member-filter" id="member-filter" placeholder="Filter by name…" autocomplete="off">
+                  <ul class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
+                </div>
+                <div class="member-actions" role="group" aria-label="Move members">
+                  <button type="button" class="member-action" id="member-add-all" title="Add all" aria-label="Add all"><span class="lucide-icon icon-chevrons-right" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-add" title="Add selected" aria-label="Add selected"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-remove" title="Remove selected" aria-label="Remove selected"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+                  <button type="button" class="member-action" id="member-remove-all" title="Remove all" aria-label="Remove all"><span class="lucide-icon icon-chevrons-left" aria-hidden="true"></span></button>
+                </div>
+                <div class="member-pane" data-side="selected">
+                  <div class="member-pane-head">
+                    <span class="member-pane-title">Selected <span class="member-count" id="member-selected-count">0</span></span>
+                    <span class="member-pane-hint">drag to reorder · priority top → bottom</span>
+                  </div>
+                  <ul class="member-list ordered" id="member-selected-list" tabindex="0" aria-label="Selected repositories (priority order)"></ul>
+                </div>
+              </div>
+            </fieldset>
+            <div class="form-actions">
+              <button class="create-button" id="save-repository-button" type="button">Save repository</button>
+              <button class="create-button secondary" id="cancel-repository-button" type="button">Cancel</button>
+            </div>
+          </form>
+            </div>
+          </div>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table usage-table">
+              <thead>
+                <tr>
+                  <th class="icon-column"></th>
+                  <th aria-sort="ascending">
+                    <button class="repo-sort-button is-active" data-repository-sort="name" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span>
+                      <span>Name</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="recipe" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
+                      <span>Recipe</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="type" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
+                      <span>Type</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repository-sort="format" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
+                      <span>Format</span>
+                    </button>
+                  </th>
+                  <th>Status</th>
+                  <th>Blob store</th>
+                  <th class="inventory-count" aria-sort="none" title="Stored files, including metadata and this repository’s own cache."><button class="repo-sort-button" data-repository-sort="assetCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Asset Count</span></button></th>
+                  <th class="inventory-count" aria-sort="none" title="Sum of asset sizes; shared content is counted per asset. This is not physical storage usage."><button class="repo-sort-button" data-repository-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Logical size</span></button></th>
+                  <th>URL</th>
+                  <th class="actions-column">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="repository-table"></tbody>
+            </table>
+          </div>
+        </section>

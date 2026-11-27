@@ -5,6 +5,7 @@
 ## 前置要求
 
 - JDK 25
+- Node.js 22.12+ 或 24 和 npm，用于前端构建
 - Maven 3.9 或兼容版本
 - MySQL 8.0 或 PostgreSQL 12+
 - 可选：Docker，用于构建镜像或启动本地依赖
@@ -78,7 +79,7 @@ docker compose -f docker-compose.dev.yml down
 
 - 如果设置了 `KKREPO_PORT`，服务会绑定到该端口；否则使用 `18090` 端口
 - 管理端口固定为 `18091`，`/actuator/health`、`/actuator/metrics` 和 `/actuator/prometheus` 从该端口暴露
-- 直接从各模块的 `src/main/resources/META-INF/resources/` 提供静态 UI 资源，因此修改 HTML/CSS/JS 后刷新浏览器即可看到效果
+- 修改 UI 模板、样式或 ES 模块后，运行 `mvn -pl admin-ui,browse-ui process-resources` 并刷新浏览器
 - 启用 `spring-boot-devtools`，支持 Java 增量重载
 - 启用 SQL DEBUG 日志
 
@@ -114,7 +115,7 @@ LiveReload 已启用，端口为 `35729`。安装 LiveReload 浏览器扩展后�
 
 | 变更 | 操作 | 生效方式 |
 | --- | --- | --- |
-| HTML / CSS / JS / 静态资源 | 刷新浏览器 | 直接从源码资源目录读取 |
+| UI 模板、CSS 和 JS | 重新构建 UI 资源并刷新浏览器 | 参见[前端模块与构建说明](../en/dev/frontend-modules.md) |
 | Java 方法体 | `scripts/recompile.sh` 或 IDE 自动构建 | devtools 重启 Spring context |
 | 新 Spring bean、schema/SQL、`application.properties` | `scripts/restart.sh` | 完整重启 |
 | `pom.xml` | `scripts/restart.sh` | Maven 重新解析依赖并完整重启 |

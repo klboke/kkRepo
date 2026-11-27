@@ -1,0 +1,138 @@
+<!doctype html>
+<html data-theme-version="@themeVersion@" data-dictionary-version="@dictionaryVersion@" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>kkrepo browse</title>
+    <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
+    <link id="kkrepo-theme-stylesheet" rel="stylesheet" href="/browse/assets/themes/default.css?v=@assetVersion@">
+    <script src="/login/assets/ui-theme.js?v=@assetVersion@"></script>
+  <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/account-menu.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/login/assets/login-modal.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=@assetVersion@">
+  </head>
+  <body>
+    <div class="nx-shell">
+      <header class="nx-topbar">
+        <div class="product">
+          <a class="logo-mark product-home-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer" aria-label="kkRepo GitHub repository">KL</a>
+          <div class="product-copy">
+            <div class="product-name" data-i18n-skip><a class="product-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer">kkRepo</a> <a class="product-version" data-current-version="@project.version@" href="https://github.com/klboke/kkRepo/releases" target="_blank" rel="noopener noreferrer">v@project.version@</a><a class="product-update-link" data-product-update hidden target="_blank" rel="noopener noreferrer" aria-label="New version available. View release." aria-describedby="browse-product-update-tooltip"><span class="lucide-icon icon-cloud-download product-update-icon" aria-hidden="true"></span><span class="product-update-tooltip" id="browse-product-update-tooltip" data-product-update-tooltip role="tooltip">New version available. View release.</span></a><br><a class="product-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer">Repository Manager</a></div>
+          </div>
+        </div>
+        <nav class="workspace-tabs" aria-label="Workspace">
+          <a class="workspace-tab is-active" href="/browse/#browse/welcome" aria-current="page">Browse</a>
+          <a class="workspace-tab" id="admin-workspace-link" href="/admin/#admin/repository/repositories" hidden>Admin</a>
+        </nav>
+        <div class="top-spacer"></div>
+        <form class="global-component-search" data-global-component-search action="/browse/" method="get" role="search">
+          <label class="global-component-search-label" for="global-component-search-input">Search components</label>
+          <span class="global-component-search-icon lucide-icon icon-search" aria-hidden="true"></span>
+          <input id="global-component-search-input" name="q" type="search" placeholder="Search components" autocomplete="off">
+        </form>
+        <button class="account-login" id="login-button" type="button" aria-label="Sign in to kkRepo">
+          <span class="account-login-icon lucide-icon icon-log-in" aria-hidden="true"></span>
+          <span class="account-entry-title">Sign in</span>
+        </button>
+        <div class="user-menu" id="user-menu" hidden>
+          <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="user-avatar" aria-hidden="true">
+              <span class="user-avatar-icon lucide-icon icon-user-round"></span>
+            </span>
+            <span class="user-identity">
+              <span class="user-name" id="current-user"></span>
+            </span>
+            <span class="user-menu-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+          </button>
+          <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
+            <div class="user-menu-summary" role="presentation">
+              <span class="user-avatar user-menu-avatar" aria-hidden="true">
+                <span class="user-avatar-icon lucide-icon icon-user-round"></span>
+              </span>
+              <span class="user-menu-summary-copy">
+                <strong id="user-menu-name"></strong>
+                <span id="user-menu-source"></span>
+              </span>
+            </div>
+            <div class="user-menu-divider" role="separator"></div>
+            <button class="user-menu-item" id="my-token-menu-item" type="button" role="menuitem">
+              <span class="user-menu-item-icon lucide-icon icon-key-round" aria-hidden="true"></span>
+              <span class="user-menu-item-copy">
+                <strong>My Token</strong>
+                <span>Manage access keys</span>
+              </span>
+            </button>
+            <button class="user-menu-item user-menu-item-danger" id="signout-button" type="button" role="menuitem">
+              <span class="user-menu-item-icon user-menu-signout-icon lucide-icon icon-log-in" aria-hidden="true"></span>
+              <span class="user-menu-item-copy">
+                <strong>Sign out</strong>
+                <span>End current session</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <aside class="nx-sidebar">
+        <nav class="side-nav" aria-label="Browse navigation">
+          <button class="side-item" data-view="welcome" type="button">
+            <span class="side-icon lucide-icon icon-home" aria-hidden="true"></span>
+            <span>Welcome</span>
+          </button>
+          <button class="side-item" data-view="search" type="button" aria-expanded="false" aria-controls="search-subnav">
+            <span class="side-icon lucide-icon icon-search" aria-hidden="true"></span>
+            <span>Search</span>
+            <span class="side-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+          </button>
+          <div class="search-subnav" id="search-subnav" hidden>
+            <button class="side-subitem" data-search-format="all" type="button"><span class="search-all-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>All components</span></button>
+            <button class="side-subitem" data-search-format="custom" type="button"><span class="search-all-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Custom search</span></button>
+            <button class="side-subitem" data-search-format="maven2" type="button"><span class="format-logo format-logo-maven" aria-hidden="true"></span><span>Maven</span></button>
+            <button class="side-subitem" data-search-format="npm" type="button"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
+            <button class="side-subitem" data-search-format="pypi" type="button"><span class="format-logo format-logo-pypi" aria-hidden="true"></span><span>PyPI</span></button>
+            <button class="side-subitem" data-search-format="docker" type="button"><span class="format-logo format-logo-docker" aria-hidden="true"></span><span>Docker / OCI</span></button>
+            <button class="side-subitem" data-search-format="nuget" type="button"><span class="format-logo format-logo-nuget" aria-hidden="true"></span><span>NuGet</span></button>
+            <button class="side-subitem" data-search-format="go" type="button"><span class="format-logo format-logo-go" aria-hidden="true"></span><span>Go</span></button>
+            <button class="side-subitem" data-search-format="helm" type="button"><span class="format-logo format-logo-helm" aria-hidden="true"></span><span>Helm</span></button>
+            <button class="side-subitem" data-search-format="cargo" type="button"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
+          </div>
+          <button class="side-item" data-view="browse" type="button">
+            <span class="side-icon lucide-icon icon-library" aria-hidden="true"></span>
+            <span>Browse</span>
+          </button>
+          <button class="side-item" id="upload-nav" data-view="upload" type="button" hidden>
+            <span class="side-icon lucide-icon icon-upload" aria-hidden="true"></span>
+            <span>Upload</span>
+          </button>
+        </nav>
+      </aside>
+
+      <main class="nx-content">
+        <section class="view is-active" id="loading-view" role="status" aria-live="polite"></section>
+        <!-- include views/welcome.html -->
+
+        <!-- include views/browse.html -->
+
+        <!-- include views/search.html -->
+
+        <!-- include views/upload.html -->
+
+        <!-- include views/my-token.html -->
+      </main>
+    </div>
+
+    <script src="/login/assets/csrf-fetch.js?v=@assetVersion@"></script>
+    <script src="/login/assets/safe-return-to.js?v=@assetVersion@"></script>
+    <script src="/login/assets/ui-i18n.js?v=@assetVersion@"></script>
+    <script src="/login/assets/delete-confirmation.js?v=@assetVersion@"></script>
+    <script src="/login/assets/product-update.js?v=@assetVersion@"></script>
+    <script src="/login/assets/login-modal.js?v=@assetVersion@"></script>
+    <script src="/browse/assets/global-component-search.js?v=@assetVersion@"></script>
+    <script type="module" src="/browse/assets/browse.js?v=@assetVersion@"></script>
+  </body>
+</html>

@@ -23,8 +23,8 @@ class AdminNpmMinimumReleaseAgeContractTest {
         "new Set([\"npm\", \"go\", \"maven2\", \"pypi\"])"));
     assertTrue(javascript.contains("MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === \"PROXY\""));
     assertTrue(javascript.contains(
-        "minimumReleaseAgeMinutes: MINIMUM_RELEASE_AGE_FORMATS.has(recipe.format)"));
-    assertTrue(javascript.contains("repo.proxy.minimumReleaseAgeMinutes ?? \"0\""));
+        "minimumReleaseAgeMinutes: MINIMUM_RELEASE_AGE_FORMATS.has(format)"));
+    assertTrue(javascript.contains("proxy.minimumReleaseAgeMinutes ?? \"0\""));
   }
 
   private String resource(String path) throws IOException {

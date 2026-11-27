@@ -21,7 +21,7 @@ class BrowseUiScrollbarContractTest {
 
     assertTrue(theme >= 0 && scrollbars > theme && components > scrollbars);
     assertTrue(index.contains(
-        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4"));
+        "/browse/assets/ui-scrollbars.css?v="));
   }
 
   @Test

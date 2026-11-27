@@ -1,20 +1,19 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
-const between = (start, end) => {
-  const from = source.indexOf(start);
-  return source.slice(from, source.indexOf(end, from));
-};
 
 function render(security) {
   const result = { hidden: true, innerHTML: '' };
   const context = { document: { getElementById: () => result }, shortText: String };
-  vm.createContext(context);
-  vm.runInContext(between('function escapeHtml(', '\n}\n') + '\n}\n'
-    + between('function renderCompactTable(', 'function renderMigrationError('), context);
+  declarations.context(context);
+  vm.runInContext(declarations('escapeHtml')
+    + declarations(
+      "renderCompactTable", "migrationTableCell", "renderMigrationSection", "renderMigrationList",
+      "migrationValues", "renderMigrationProfile", "renderMigrationPlan", "renderMigrationPlanItems",
+      "migrationScriptApiSummary", "migrationPlanStatusBadge", "renderMigrationHash",
+      "renderMigrationUserTokens", "renderMigrationResult",
+    ), context);
   context.renderMigrationResult({ security, warnings: ['Nexus Pro user tokens are not migrated; see security.userTokens'] }, 'Preflight result');
   return result.innerHTML;
 }

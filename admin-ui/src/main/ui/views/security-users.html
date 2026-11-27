@@ -1,0 +1,78 @@
+        <section class="view fixed-table-view" id="security-users-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-users" aria-hidden="true"></span></span>
+            <h1>Users</h1>
+            <span class="heading-copy">Manage local and external security users</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-user-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create user</button>
+            <label class="select-filter">
+              <span>Source</span>
+              <select id="security-user-source-filter">
+                <option value="">All sources</option>
+              </select>
+            </label>
+            <label class="filter-box">
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+              <input id="security-user-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <div class="form-modal" id="security-user-form-modal" data-form-id="security-user-form" role="dialog" aria-modal="true" aria-labelledby="security-user-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-user-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="security-user-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+          <form class="blobstore-form modal-form" id="security-user-form" hidden novalidate>
+            <div class="form-title" id="security-user-form-title">Create user</div>
+            <div class="form-grid">
+              <label><span>Source</span><select id="security-user-source"><option value="Local">Local</option><option value="OIDC">OIDC</option><option value="LDAP">LDAP</option></select></label>
+              <label><span>User ID <span class="required-mark">*</span></span><input id="security-user-id" type="text" autocomplete="off" required></label>
+              <label><span>First name</span><input id="security-user-first-name" type="text"></label>
+              <label><span>Last name</span><input id="security-user-last-name" type="text"></label>
+              <label><span>Email</span><input id="security-user-email" type="email"></label>
+              <label><span>Status</span><select id="security-user-status"><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
+              <label><span>Password</span><input id="security-user-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <section id="security-user-external-section" class="full-width role-transfer-section" hidden>
+                <div class="role-transfer-title">External roles <span class="state-badge compact">read-only</span></div>
+                <div id="security-user-external-roles" class="security-role-badges"></div>
+                <p class="field-note">Roles assigned by the identity provider at the user's last sign-in.</p>
+              </section>
+              <input id="security-user-roles" type="hidden">
+              <div class="full-width role-transfer-section">
+                <div class="role-transfer-title">Local roles</div>
+                <div class="member-transfer role-transfer" id="user-role-transfer">
+                  <div class="member-pane" data-side="available">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Available <span class="member-count" id="user-role-available-count">0</span></span>
+                    </div>
+                    <input type="search" class="member-filter" id="user-role-filter" placeholder="Filter roles..." autocomplete="off">
+                    <ul class="member-list" id="user-role-available-list" tabindex="0" aria-label="Available roles"></ul>
+                  </div>
+                  <div class="member-actions" role="group" aria-label="Move user roles">
+                    <button type="button" class="member-action" id="user-role-add-all" title="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="user-role-add" title="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="user-role-remove" title="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="user-role-remove-all" title="Remove all">&laquo;</button>
+                  </div>
+                  <div class="member-pane" data-side="selected">
+                    <div class="member-pane-head">
+                      <span class="member-pane-title">Granted <span class="member-count" id="user-role-selected-count">0</span></span>
+                    </div>
+                    <ul class="member-list" id="user-role-selected-list" tabindex="0" aria-label="Granted roles"></ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-user-button" type="button">Save user</button>
+              <button class="create-button secondary" id="cancel-security-user-button" type="button">Cancel</button>
+            </div>
+          </form>
+            </div>
+          </div>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Source</th><th>User ID</th><th>Status</th><th>Email</th><th>Roles</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-user-table"></tbody>
+            </table>
+          </div>
+        </section>

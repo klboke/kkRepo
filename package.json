@@ -1,0 +1,7 @@
+{
+  "name": "kkrepo",
+  "private": true,
+  "imports": {
+    "#ui-shared/*": "./admin-ui/src/main/ui/shared/*"
+  }
+}

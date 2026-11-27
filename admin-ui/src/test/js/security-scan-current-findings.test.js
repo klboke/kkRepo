@@ -1,9 +1,10 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {join} = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
+
 function setup() {
   const requests = [];
   const c = {URLSearchParams, document: {querySelector: () => ({value: ' app '})},
@@ -12,10 +13,23 @@ function setup() {
       requests.push(new URL(url, 'https://kkrepo.test').searchParams);
       return {items: [{id: 41}], nextAfter: 41};
     }};
-  vm.createContext(c);
+  declarations.context(c);
   require("./authorization-fixture")(c);
-  vm.runInContext(source.slice(source.indexOf('let securityScanState ='), source.indexOf('let securityScanPolicyFormMode'))
-    + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()')), c);
+  vm.runInContext(declarations(
+    "securityScanState", "SECURITY_SCAN_DEFAULT_PAGE_SIZE", "securityScanListEndpoints",
+    "securityScanPages", "securityScanFindingTreeExpanded",
+  )
+    + declarations(
+      "securityScanPageParams", "securityScanFindingRootGroupBy", "securityScanFindingChildGroupBy",
+      "securityScanFindingGroupNode", "securityScanFindingNodes", "findSecurityScanFindingNode",
+      "refreshSecurityScanFindingTree", "securityScanListItems", "setSecurityScanListItems",
+      "restoreSecurityScanFindingNodes", "toggleSecurityScanFindingNode",
+      "loadSecurityScanFindingNodeChildren", "showMoreSecurityScanFindingNode", "fetchSecurityScanPage",
+      "resetSecurityScanPage", "renderSecurityScanPagination", "renderSecurityScanList",
+      "loadSecurityScanList", "searchSecurityScanList", "clearSecurityScanListSearch",
+      "moveSecurityScanPage", "sortSecurityScanPage", "filterCurrentSecurityScanFindings",
+      "SECURITY_SCAN_FINDING_SWITCHES", "filterSecurityScanFindings", "resizeSecurityScanPage",
+    ), c);
   c.renderSecurityScanList = () => {};
   return {c, requests, run: code => vm.runInContext(code, c)};
 }
@@ -54,7 +68,7 @@ test('late historical response cannot replace a newly selected current view', as
 test('artifact details keep the selected filter throughout their pagination', async () => {
   const {c, run} = setup();
   vm.runInContext('let securityScanFindingArtifactDetail = null;'
-    + source.slice(source.indexOf('async function loadSecurityScanFindingArtifacts('), source.indexOf('function showSecurityScanFindingDetail(')), c);
+    + declarations("loadSecurityScanFindingArtifacts"), c);
   c.renderSecurityScanFindingArtifactItems = () => {};
   const requests = [];
   c.fetch = async url => {
@@ -77,8 +91,8 @@ test('waiver details and target selection carry the selected current or historic
   c.openFormModal = c.clearRequiredFieldErrors = c.showToast = () => {};
   c.responseErrorMessage = async () => 'fixture stops before rendering';
   vm.runInContext('let securityScanWaiverContext = null; const securityScanWaiverRequiredFields = [];'
-    + source.slice(source.indexOf('async function showSecurityScanWaiverDetail('), source.indexOf('function hideSecurityScanWaiverDetail('))
-    + source.slice(source.indexOf('async function showCreateSecurityScanWaiverForm('), source.indexOf('function hideSecurityScanWaiverForm(')), c);
+    + declarations("showSecurityScanWaiverDetail")
+    + declarations("showCreateSecurityScanWaiverForm"), c);
   const requests = [];
   c.fetch = async url => {requests.push(new URL(url, 'https://kkrepo.test')); return {ok: false};};
   for (const currentOnly of [true, false]) {

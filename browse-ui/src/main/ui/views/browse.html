@@ -1,0 +1,44 @@
+        <section class="view" id="browse-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-library" aria-hidden="true"></span></span>
+            <h1>Browse</h1>
+            <span class="heading-copy">Browse assets and components</span>
+          </div>
+          <div class="table-tools">
+            <label class="filter-box">
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+              <input id="repository-filter" type="search" placeholder="Filter">
+            </label>
+          </div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead>
+                <tr>
+                  <th class="icon-column"></th>
+                  <th aria-sort="ascending">
+                    <button class="repo-sort-button is-active" data-repo-sort="name" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span>
+                      <span>Name</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repo-sort="type" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
+                      <span>Type</span>
+                    </button>
+                  </th>
+                  <th aria-sort="none">
+                    <button class="repo-sort-button" data-repo-sort="format" type="button">
+                      <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
+                      <span>Format</span>
+                    </button>
+                  </th>
+                  <th>Status</th>
+                  <th>URL</th>
+                </tr>
+              </thead>
+              <tbody id="repository-table"></tbody>
+            </table>
+          </div>
+          <div class="repository-copy-status" id="repository-copy-status" role="status" aria-live="polite" aria-atomic="true"></div>
+        </section>

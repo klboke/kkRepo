@@ -1,0 +1,11 @@
+{
+  "name": "kkrepo-ui-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "rollup": "4.60.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}

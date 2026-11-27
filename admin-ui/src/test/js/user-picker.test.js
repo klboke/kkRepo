@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { create } = require("../../main/resources/META-INF/resources/admin/assets/user-picker.js");
+const { create } = require("../../main/ui/js/user-picker.js");
 
 class Element {
   constructor(id = "") { this.id = id; this.attrs = {}; this.events = {}; this.children = []; this.value = ""; this.classList = { toggle() {} }; }
@@ -103,7 +103,7 @@ test("late loads cannot overwrite reopened rotation; closing discards the catalo
 
 test("lookup failures keep selection blocked and reopening retries", async () => {
   await withPicker(async ({ picker, source, user, status }) => {
-    global.fetch = async () => ({ ok: false });
+    global.fetch = async () => new Response("Permission denied", { status: 500 });
     await picker.open();
     assert.match(status.textContent, /Permission denied/);
     assert.equal(source.disabled, true);
@@ -115,7 +115,6 @@ test("lookup failures keep selection blocked and reopening retries", async () =>
     assert.equal(status.textContent, "");
   });
 });
-
 
 test("mouse selection suppresses label activation and closes the dropdown", async () => {
   await withPicker(async ({ picker, user }) => {

@@ -1,0 +1,308 @@
+<!doctype html>
+<html data-theme-version="@themeVersion@" data-dictionary-version="@dictionaryVersion@" lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>kkrepo administration</title>
+    <link rel="icon" type="image/svg+xml" href="/admin/assets/favicon.svg?v=20260609-kl-logo-1">
+    <link id="kkrepo-theme-stylesheet" rel="stylesheet" href="/browse/assets/themes/default.css?v=@assetVersion@">
+    <script src="/login/assets/ui-theme.js?v=@assetVersion@"></script>
+  <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=@assetVersion@">
+    <link rel="stylesheet" href="./assets/admin.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/account-menu.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=@assetVersion@">
+    <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=@assetVersion@">
+  </head>
+  <body>
+    <div class="nx-shell">
+      <header class="nx-topbar">
+        <div class="product">
+          <a class="logo-mark product-home-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer" aria-label="kkRepo GitHub repository">KL</a>
+          <div class="product-copy">
+            <div class="product-name" data-i18n-skip><a class="product-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer">kkRepo</a> <a class="product-version" data-current-version="@project.version@" href="https://github.com/klboke/kkRepo/releases" target="_blank" rel="noopener noreferrer">v@project.version@</a><a class="product-update-link" data-product-update hidden target="_blank" rel="noopener noreferrer" aria-label="New version available. View release." aria-describedby="admin-product-update-tooltip"><span class="lucide-icon icon-cloud-download product-update-icon" aria-hidden="true"></span><span class="product-update-tooltip" id="admin-product-update-tooltip" data-product-update-tooltip role="tooltip">New version available. View release.</span></a><br><a class="product-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer">Repository Manager</a></div>
+          </div>
+        </div>
+        <nav class="workspace-tabs" aria-label="Workspace">
+          <a class="workspace-tab" href="/browse/#browse/welcome">Browse</a>
+          <a class="workspace-tab is-active" href="/admin/" aria-current="page">Admin</a>
+        </nav>
+        <div class="top-spacer"></div>
+        <form class="global-component-search" data-global-component-search action="/browse/" method="get" role="search">
+          <label class="global-component-search-label" for="global-component-search-input">Search components</label>
+          <span class="global-component-search-icon lucide-icon icon-search" aria-hidden="true"></span>
+          <input id="global-component-search-input" name="q" type="search" placeholder="Search components" autocomplete="off">
+        </form>
+        <div class="user-menu" id="user-menu" hidden>
+          <button class="user-menu-trigger" id="user-menu-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="user-avatar" aria-hidden="true">
+              <span class="user-avatar-icon lucide-icon icon-user-round"></span>
+            </span>
+            <span class="user-identity">
+              <span class="user-name" id="current-user"></span>
+            </span>
+            <span class="user-menu-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+          </button>
+          <div class="user-menu-popover" id="user-menu-popover" role="menu" aria-hidden="true">
+            <div class="user-menu-summary" role="presentation">
+              <span class="user-avatar user-menu-avatar" aria-hidden="true">
+                <span class="user-avatar-icon lucide-icon icon-user-round"></span>
+              </span>
+              <span class="user-menu-summary-copy">
+                <strong id="user-menu-name"></strong>
+                <span id="user-menu-source"></span>
+              </span>
+            </div>
+            <div class="user-menu-divider" role="separator"></div>
+            <button class="user-menu-item" id="my-token-menu-item" type="button" role="menuitem">
+              <span class="user-menu-item-icon lucide-icon icon-key-round" aria-hidden="true"></span>
+              <span class="user-menu-item-copy">
+                <strong>My Token</strong>
+                <span>Manage access keys</span>
+              </span>
+            </button>
+            <button class="user-menu-item user-menu-item-danger" id="signout-button" type="button" role="menuitem">
+              <span class="user-menu-item-icon user-menu-signout-icon lucide-icon icon-log-in" aria-hidden="true"></span>
+              <span class="user-menu-item-copy">
+                <strong>Sign out</strong>
+                <span>End current session</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </header>
+      <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+      <div class="field-help-popover" id="field-help-popover" role="tooltip" hidden></div>
+      <div class="cleanup-policy-action-menu" id="cleanup-policy-action-menu" role="menu" aria-hidden="true" hidden></div>
+      <div class="cleanup-policy-action-menu" id="blobstore-action-menu" role="menu" aria-hidden="true" hidden></div>
+
+      <aside class="nx-sidebar">
+        <nav class="side-nav" aria-label="Administration navigation">
+          <button class="side-group is-open" data-side-group="repository" type="button" aria-expanded="true" aria-controls="side-group-repository-items">
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
+            <span class="side-group-label">Repository</span>
+          </button>
+          <div class="side-group-items" id="side-group-repository-items" data-side-group-items="repository">
+            <button class="side-item" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
+            <button class="side-item" data-view="cleanup-policies" type="button"><span class="side-item-icon lucide-icon icon-archive" aria-hidden="true"></span><span>Cleanup Policies</span></button>
+            <button class="side-item" data-view="routing-rules" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Routing Rules</span></button>
+            <button class="side-item" data-view="content-selectors" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Content Selectors</span></button>
+            <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
+            <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
+          </div>
+          <button class="side-group is-open" data-side-group="security" type="button" aria-expanded="true" aria-controls="side-group-security-items">
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
+            <span class="side-group-label">Security</span>
+          </button>
+          <div class="side-group-items" id="side-group-security-items" data-side-group-items="security">
+            <button class="side-item" data-view="security-users" type="button"><span class="side-item-icon lucide-icon icon-users" aria-hidden="true"></span><span>Users</span></button>
+            <button class="side-item" data-view="security-roles" type="button"><span class="side-item-icon lucide-icon icon-shield-check" aria-hidden="true"></span><span>Roles</span></button>
+            <button class="side-item" data-view="security-privileges" type="button"><span class="side-item-icon lucide-icon icon-key" aria-hidden="true"></span><span>Privileges</span></button>
+            <button class="side-item" data-view="security-realms" type="button"><span class="side-item-icon lucide-icon icon-waypoints" aria-hidden="true"></span><span>Realms</span></button>
+            <button class="side-item" data-view="security-ldap" type="button"><span class="side-item-icon lucide-icon icon-network" aria-hidden="true"></span><span>LDAP</span></button>
+            <button class="side-item" data-view="security-oidc" type="button"><span class="side-item-icon lucide-icon icon-log-in" aria-hidden="true"></span><span>OIDC</span></button>
+            <button class="side-item" data-view="security-anonymous" type="button"><span class="side-item-icon lucide-icon icon-user-round-x" aria-hidden="true"></span><span>Anonymous</span></button>
+            <button class="side-item" data-view="security-api-keys" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>Keys &amp; Tokens</span></button>
+            <button class="side-item" data-view="security-scanning" type="button"><span class="side-item-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>Artifact Scanning</span></button>
+            <button class="side-item" data-view="security-audit-log" type="button"><span class="side-item-icon lucide-icon icon-scroll-text" aria-hidden="true"></span><span>Audit Log</span></button>
+          </div>
+          <button class="side-group is-open" data-side-group="system" type="button" aria-expanded="true" aria-controls="side-group-system-items">
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
+            <span class="side-group-label">System</span>
+          </button>
+          <div class="side-group-items" id="side-group-system-items" data-side-group-items="system">
+            <button class="side-item" data-view="proxy-settings" type="button"><span class="side-item-icon lucide-icon icon-route" aria-hidden="true"></span><span>Proxy Settings</span></button>
+            <button class="side-item" data-view="download-offload" type="button"><span class="side-item-icon lucide-icon icon-download" aria-hidden="true"></span><span>Download Offload</span></button>
+            <button class="side-item" data-view="ui-settings" type="button"><span class="side-item-icon lucide-icon icon-sliders-horizontal" aria-hidden="true"></span><span>UI Settings</span></button>
+          </div>
+          <button class="side-group is-open" data-side-group="migration" type="button" aria-expanded="true" aria-controls="side-group-migration-items">
+            <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
+            <span class="side-group-label">Migration</span>
+          </button>
+          <div class="side-group-items" id="side-group-migration-items" data-side-group-items="migration">
+            <button class="side-item" data-view="nexus-migration" type="button"><span class="side-item-icon lucide-icon icon-database-backup" aria-hidden="true"></span><span>Nexus Metadata</span></button>
+            <button class="side-item" data-view="repository-data-migration" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>Nexus Repository Data</span></button>
+            <button class="side-item" data-view="ohpm-import" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>OHPM Import</span></button>
+          </div>
+        </nav>
+      </aside>
+
+      <main class="nx-content">
+        <section class="view is-active" id="loading-view" role="status" aria-live="polite"></section>
+        <!-- include views/repositories.html -->
+
+        <!-- include views/routing-rules.html -->
+        <!-- include views/content-selectors.html -->
+        <!-- include views/cleanup-policies.html -->
+
+        <!-- include views/blobstores.html -->
+
+        <!-- include views/docker-registry.html -->
+
+        <!-- include views/security-users.html -->
+
+        <!-- include views/security-roles.html -->
+
+        <!-- include views/security-privileges.html -->
+
+        <!-- include views/security-realms.html -->
+
+          <!-- include views/security-ldap.html -->
+
+          <!-- include views/security-oidc.html -->
+
+        <!-- include views/security-api-keys.html -->
+
+        <!-- include views/security-scanning.html -->
+
+        <!-- include views/security-audit-log.html -->
+
+        <!-- include views/security-anonymous.html -->
+
+        <!-- include views/proxy-settings.html -->
+
+        <!-- include views/download-offload.html -->
+
+        <!-- include views/ui-settings.html -->
+
+        <!-- include views/ohpm-login.html -->
+
+        <!-- include views/ohpm-import.html -->
+
+        <!-- include views/nexus-migration.html -->
+
+        <!-- include views/repository-data-migration.html -->
+
+      </main>
+    </div>
+
+    <dialog class="proxy-settings-dialog wide" id="proxy-repository-list" aria-labelledby="proxy-repository-list-title">
+      <div class="proxy-dialog-header"><h2 id="proxy-repository-list-title">Repository proxies</h2></div>
+      <div class="proxy-dialog-body">
+        <div class="proxy-settings-toolbar">
+          <select id="proxy-repository-mode-filter" aria-label="Filter by proxy mode">
+            <option value="">All proxy modes</option>
+            <option value="INHERIT">Use system settings</option>
+            <option value="OVERRIDE">Use repository settings</option>
+            <option value="DIRECT">Direct connection</option>
+          </select>
+        </div>
+        <div class="nx-table-frame"><table class="nx-table">
+          <thead><tr><th>Repository</th><th>Proxy mode</th><th>Upstream route</th><th>Actions</th></tr></thead>
+          <tbody id="proxy-repository-list-body"></tbody>
+        </table></div>
+      </div>
+      <div class="proxy-dialog-footer"><button type="button" class="create-button secondary" data-proxy-close>Done</button></div>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="proxy-repository-edit" aria-labelledby="proxy-repository-edit-title">
+      <form id="proxy-repository-edit-form">
+        <div class="proxy-dialog-header">
+          <h2 id="proxy-repository-edit-title">Edit proxy</h2><code id="proxy-repository-edit-name"></code>
+        </div>
+        <div class="proxy-dialog-body">
+          <div class="form-grid">
+            <label class="full-width"><span>Proxy mode</span>
+              <select id="scoped-proxy-mode">
+                <option value="DIRECT">Direct connection</option>
+                <option value="INHERIT">Use system settings</option>
+                <option value="OVERRIDE">Use repository settings</option>
+              </select>
+            </label>
+            <label><span>Proxy type</span><select id="scoped-proxy-type"><option value="" disabled>Not configured</option><option value="HTTP">HTTP</option><option value="SOCKS">SOCKS5</option></select></label>
+            <label><span>Proxy host</span><input id="scoped-proxy-host" autocomplete="off"></label>
+            <label><span>Proxy port</span><input id="scoped-proxy-port" type="number" min="1" max="65535"></label>
+            <label><span>Proxy username</span><input id="scoped-proxy-username" autocomplete="off"></label>
+            <label><span>Proxy password</span><input id="scoped-proxy-password" type="password" autocomplete="new-password"></label>
+            <label class="checkbox-field"><input id="scoped-proxy-password-clear" type="checkbox"><span>Clear saved proxy password</span></label>
+          </div>
+          <p class="form-note" id="proxy-repository-edit-status" role="status"></p>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button type="button" class="create-button secondary" data-proxy-close>Cancel</button>
+          <button type="submit" class="create-button" id="proxy-repository-save">Save proxy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog wide" id="proxy-batch-dialog" aria-labelledby="proxy-batch-title">
+      <div class="proxy-dialog-header"><h2 id="proxy-batch-title">Switch repositories to system settings</h2></div>
+      <div class="proxy-dialog-body">
+        <div class="proxy-settings-toolbar">
+          <button class="create-button secondary" id="proxy-batch-select-direct" type="button">Select eligible direct repositories</button>
+          <span class="form-note proxy-batch-selection" role="status" aria-atomic="true">
+            <span>Selected</span> <span id="proxy-batch-count"></span>
+          </span>
+        </div>
+        <div class="nx-table-frame"><table class="nx-table">
+          <thead><tr><th>Repository</th><th>Current route</th><th>After switching</th></tr></thead>
+          <tbody id="proxy-batch-body"></tbody>
+        </table></div>
+        <p class="form-note" id="proxy-batch-status" role="status"></p>
+      </div>
+      <div class="proxy-dialog-footer">
+        <button type="button" class="create-button secondary" data-proxy-close>Cancel</button>
+        <button class="create-button secondary" id="proxy-batch-back" type="button" hidden>Back</button>
+        <button class="create-button" id="proxy-batch-next" type="button">Preview changes</button>
+      </div>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="proxy-test-dialog" aria-labelledby="proxy-test-title">
+      <form id="proxy-test-form">
+        <div class="proxy-dialog-header"><h2 id="proxy-test-title">Test connection</h2></div>
+        <div class="proxy-dialog-body">
+          <label><span>Test upstream</span><select id="proxy-test-repository" required></select></label>
+          <p class="form-note">Tests the current form settings against the selected upstream.</p>
+          <p class="form-note" id="proxy-test-result" role="status"></p>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button type="button" class="create-button secondary" data-proxy-close>Done</button>
+          <button type="submit" class="create-button" id="proxy-test-run">Start test</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="offload-example-dialog" aria-labelledby="offload-example-title">
+      <div class="proxy-dialog-header"><h2 id="offload-example-title">Deployment example</h2></div>
+      <div class="proxy-dialog-body">
+        <p class="form-note" id="offload-example-note"></p>
+        <label for="offload-example-code">Proxy configuration</label>
+        <textarea class="offload-example-code" id="offload-example-code" rows="14" readonly spellcheck="false"></textarea>
+        <a id="offload-proxy-docs" target="_blank" rel="noreferrer noopener">View proxy documentation</a>
+      </div>
+      <div class="proxy-dialog-footer">
+        <button class="create-button secondary" id="offload-copy-example" type="button">Copy example</button>
+        <form method="dialog"><button class="create-button" type="submit">Done</button></form>
+      </div>
+    </dialog>
+    <dialog class="proxy-settings-dialog" id="offload-verify-dialog" aria-labelledby="offload-verify-title">
+      <form id="offload-probe-form">
+        <div class="proxy-dialog-header offload-verify-header">
+          <h2 id="offload-verify-title">Verify offload</h2>
+          <p class="state-badge offload-verify-result" id="offload-probe-result" role="status" aria-atomic="true"></p>
+        </div>
+        <div class="proxy-dialog-body">
+          <p class="form-note">Open this page through the trusted proxy. Use the path of a file you can download from the selected Blob Store.</p>
+          <div class="form-grid">
+            <label class="full-width"><span>File Blob Store</span><select id="offload-probe-store" required></select></label>
+            <label class="full-width"><span>Artifact path</span><input id="offload-probe-path" placeholder="/repository/my-repository/path/to/file" required></label>
+          </div>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button class="create-button secondary" id="offload-probe-close" type="button">Close</button>
+          <button class="create-button" id="offload-probe-run" type="submit">Run verification</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/login/assets/csrf-fetch.js?v=@assetVersion@"></script>
+    <script src="/login/assets/safe-return-to.js?v=@assetVersion@"></script>
+    <script src="/login/assets/ui-i18n.js?v=@assetVersion@"></script>
+    <script src="/login/assets/delete-confirmation.js?v=@assetVersion@"></script>
+    <script src="/login/assets/product-update.js?v=@assetVersion@"></script>
+    <script src="./assets/admin-filter.js?v=@assetVersion@"></script>
+    <script src="/browse/assets/global-component-search.js?v=@assetVersion@"></script>
+    <script type="module" src="./assets/admin.js?v=@assetVersion@"></script>
+  </body>
+</html>

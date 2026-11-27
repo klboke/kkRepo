@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { privilegePayload } = require('../../main/resources/META-INF/resources/admin/assets/content-selectors.js');
+const { privilegePayload } = require('../../main/ui/js/content-selectors.js');
 const repos = [{ name: 'team-group', format: 'maven2', type: 'group' }];
 test('selector privilege maps repository and format scopes to the Nexus REST contract', () => {
   assert.deepEqual(privilegePayload('team-read', 'Team', 'team', 'team-group', ['browse', 'read'], repos), {
@@ -19,7 +19,6 @@ test('invalid privilege scopes cannot silently widen to all repositories', () =>
 test('loading selectors with Object prototype names keeps every row and its own references', async () => {
   const fs = require('node:fs');
   const vm = require('node:vm');
-  const source = fs.readFileSync(require.resolve('../../main/resources/META-INF/resources/admin/assets/content-selectors.js'), 'utf8');
   const names = ['constructor', 'toString', 'hasOwnProperty', '__proto__'];
   for (const references of [{}, JSON.parse('{"constructor":["constructor-read"],"__proto__":["legacy-read"]}')]) {
     const elements = new Map();
@@ -45,8 +44,7 @@ test('loading selectors with Object prototype names keeps every row and its own 
           : names.map(name => ({ name, type: 'csel', expression: 'path == "/team"' })))
       })
     });
-    vm.runInContext(source, context);
-    await context.KkContentSelectors.load();
+    await require("../../../../scripts/ui/module-fixture.cjs")("admin", "content-selectors", context).load();
     assert.equal(elements.get('selector-status').textContent, '');
     const rows = elements.get('selector-table').children;
     assert.equal(rows.length, names.length);

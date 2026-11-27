@@ -5,6 +5,7 @@ This document is for local development, testing, and debugging. Project overview
 ## Prerequisites
 
 - JDK 25
+- Node.js 22.12+ or 24 and npm for the frontend build
 - Maven 3.9 or a compatible version
 - MySQL 8.0 or PostgreSQL 12+
 - Optional: Docker, for building images or starting local dependencies
@@ -78,7 +79,7 @@ Helper scripts are under `scripts/`. They use the Spring `dev` profile. This pro
 
 - Binds the service to `KKREPO_PORT` when set; otherwise it uses port `18090`
 - Uses management port `18091`; `/actuator/health`, `/actuator/metrics`, and `/actuator/prometheus` are exposed from that port
-- Serves static UI resources directly from each module's `src/main/resources/META-INF/resources/`, so HTML/CSS/JS changes are visible after refreshing the browser
+- Rebuild UI templates, styles and ES modules with `mvn -pl admin-ui,browse-ui process-resources`, then refresh the browser
 - Enables `spring-boot-devtools` for Java incremental reload
 - Enables SQL DEBUG logging
 
@@ -114,7 +115,7 @@ LiveReload is enabled on port `35729`. Installing a LiveReload browser extension
 
 | Change | Operation | How it takes effect |
 | --- | --- | --- |
-| HTML / CSS / JS / static resources | Refresh browser | Read directly from source resource directories |
+| UI templates, CSS and JS | Rebuild UI resources and refresh | See [Frontend modules](dev/frontend-modules.md) |
 | Java method body | `scripts/recompile.sh` or IDE auto build | devtools restarts the Spring context |
 | New Spring bean, schema/SQL, `application.properties` | `scripts/restart.sh` | Full restart |
 | `pom.xml` | `scripts/restart.sh` | Maven re-resolves dependencies and fully restarts |

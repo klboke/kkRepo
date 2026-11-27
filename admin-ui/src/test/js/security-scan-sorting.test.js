@@ -1,9 +1,9 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {join} = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function setup() {
   const requests = [];
@@ -37,12 +37,24 @@ function setup() {
       return {items: [{id: 99}], nextCursor: 'opaque-boundary'};
     }
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('let securityScanState ='), source.indexOf('let securityScanPolicyFormMode'))
-    + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()'))
-    + source.slice(source.indexOf('function updateTableSortHeaders('), source.indexOf('function filteredBlobStores('))
-    + source.slice(source.indexOf('["tasks", "runs"].forEach((key) => {'),
-      source.indexOf('document.querySelectorAll("[data-security-scan-page-size]")')), context);
+  declarations.context(context);
+  vm.runInContext(declarations(
+    "securityScanState", "SECURITY_SCAN_DEFAULT_PAGE_SIZE", "securityScanListEndpoints",
+    "securityScanPages", "securityScanFindingTreeExpanded",
+  )
+    + declarations(
+      "securityScanPageParams", "securityScanFindingRootGroupBy", "securityScanFindingChildGroupBy",
+      "securityScanFindingGroupNode", "securityScanFindingNodes", "findSecurityScanFindingNode",
+      "refreshSecurityScanFindingTree", "securityScanListItems", "setSecurityScanListItems",
+      "restoreSecurityScanFindingNodes", "toggleSecurityScanFindingNode",
+      "loadSecurityScanFindingNodeChildren", "showMoreSecurityScanFindingNode", "fetchSecurityScanPage",
+      "resetSecurityScanPage", "renderSecurityScanPagination", "renderSecurityScanList",
+      "loadSecurityScanList", "searchSecurityScanList", "clearSecurityScanListSearch",
+      "moveSecurityScanPage", "sortSecurityScanPage", "filterCurrentSecurityScanFindings",
+      "SECURITY_SCAN_FINDING_SWITCHES", "filterSecurityScanFindings", "resizeSecurityScanPage",
+    )
+    + declarations("updateTableSortHeaders")
+    + declarations("bindScanSortControls") + "bindScanSortControls();", context);
   context.renderSecurityScanList = () => {};
   return {c: context, requests, headers, run: code => vm.runInContext(code, context)};
 }

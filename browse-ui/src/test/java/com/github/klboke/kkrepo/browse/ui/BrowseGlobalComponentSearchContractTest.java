@@ -55,7 +55,7 @@ class BrowseGlobalComponentSearchContractTest {
         "data-custom-search-format=\"gitlfs\"><span class=\"format-logo format-logo-gitlfs\""));
     assertTrue(index.contains("<h1 id=\"component-search-title\">Search Maven</h1>"));
     assertTrue(index.contains(
-        "/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1"));
+        "/browse/assets/global-component-search.css?v="));
     assertTrue(index.contains("/browse/assets/global-component-search.js"));
 
     assertTrue(javascript.contains("all: \"all\""));

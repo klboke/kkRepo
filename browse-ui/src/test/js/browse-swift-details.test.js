@@ -1,26 +1,11 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
 function loadSwiftDetails() {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const repoUrlStart = source.indexOf("function repositoryBaseUrl");
-  const repoUrlEnd = source.indexOf("function dockerRepositoryBaseUrl", repoUrlStart);
-  const pathStart = source.indexOf("function pathSegments");
-  const usageStart = source.indexOf("function hasDirectoryUsage", pathStart);
-  const swiftStart = source.indexOf("function swiftUsageDetail");
-  const swiftEnd = source.indexOf("async function usageDetailForEntry", swiftStart);
-  assert.notEqual(repoUrlStart, -1);
-  assert.notEqual(repoUrlEnd, -1);
-  assert.notEqual(pathStart, -1);
-  assert.notEqual(usageStart, -1);
-  assert.notEqual(swiftStart, -1);
-  assert.notEqual(swiftEnd, -1);
-  const context = vm.createContext({
+
+  const context = declarations.context({
     repositoriesCache: [],
     currentRepository: () => ({ format: "swift", type: "hosted" }),
     state: { repo: "swift-hosted" },
@@ -39,9 +24,12 @@ function loadSwiftDetails() {
     },
   });
   vm.runInContext(
-    `${source.slice(repoUrlStart, repoUrlEnd)}\n`
-      + `${source.slice(pathStart, usageStart)}\n`
-      + `${source.slice(swiftStart, swiftEnd)}\n`
+    `${declarations("repositoryBaseUrl")}\n`
+      + `${declarations("pathSegments", "latestVersion")}\n`
+      + `${declarations(
+        "swiftUsageDetail", "ansibleGalaxyUsageDetail", "condaUsageDetail", "conanUsageDetail",
+        "aptUsageDetail", "alpineUsageDetail", "rUsageDetail", "huggingFaceUsageDetail",
+      )}\n`
       + "globalThis.swiftUsageDetail = swiftUsageDetail;",
     context,
   );
@@ -82,7 +70,6 @@ test("strips only the archive extension from Swift archive assets", () => {
   assert.equal(detailVersion(archive), "1.0.0+linux.zip");
   assert.equal(detailVersion(manifest), "1.0.0+linux.zip");
 });
-
 
 test("uses the server-advertised repository prefix in client instructions", () => {
   const context = loadSwiftDetails();

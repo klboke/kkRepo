@@ -1,9 +1,9 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
+
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function setup(fetch) {
   const elements = new Map();
@@ -19,11 +19,16 @@ function setup(fetch) {
     lowerOrEmpty: value => String(value || '').toLowerCase(), repositoryDisplayUrl: () => '',
     blobRenders: 0, repoRenders: 0,
   };
-  vm.createContext(context);
-  vm.runInContext('let repositories = [], blobStores = [], repositoryUsage, blobStoreUsage; let repositoryLoadVersion = 0, blobStoreLoadVersion = 0; let repositorySort = {key:"name",direction:"asc"}, blobStoreSort = {key:"name",direction:"asc"};\n'
-    + source.slice(source.indexOf('function filteredRepositories()'), source.indexOf('function toggleRepositorySort('))
-    + source.slice(source.indexOf('function blobStoreSortValue('), source.indexOf('function renderBlobStores('))
-    + source.slice(source.indexOf('function inventoryValue('), source.indexOf('function blobStoreFormPayload()')), context);
+  declarations.context(context);
+  vm.runInContext('var repositories = [], blobStores = [], repositoryUsage, blobStoreUsage; let repositoryLoadVersion = 0, blobStoreLoadVersion = 0; var repositorySort = {key:"name",direction:"asc"}, blobStoreSort = {key:"name",direction:"asc"};\n'
+    + declarations("repositoryRequest", "listRepositoryRecipes", "listRepositories")
+    + declarations("filteredRepositories", "repositorySortValue", "sortRepositories")
+    + declarations("blobStoreSortValue", "sortBlobStores", "toggleBlobStoreSort")
+    + declarations(
+      "inventoryValue", "formatInventoryBytes", "renderInventoryMetric", "renderGroupUsage",
+      "renderRepositoryMetric", "renderUsageSummary", "refreshRepositoryStoreFilter",
+      "fetchInventoryUsage", "loadBlobStores", "loadRepositoryRecipes", "loadRepositories",
+    ), context);
   return { context, element, run: code => vm.runInContext(code, context) };
 }
 const response = value => ({ ok: true, json: async () => value });

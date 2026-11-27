@@ -1,0 +1,22 @@
+import "./shell/legacy-route.js";
+import { bindShellEvents } from "./shell/navigation-events.js";
+import { bindRepositoriesEvents } from "./repositories/events.js";
+import { bindStorageEvents } from "./storage/events.js";
+import { bindCleanupEvents } from "./cleanup/events.js";
+import { bindScanningEvents } from "./scanning/events.js";
+import { bindSecurityEvents } from "./security/events.js";
+import { bindSystemEvents } from "./system/events.js";
+import { bindAuditEvents } from "./audit/events.js";
+import { bindMigrationEvents } from "./migration/events.js";
+import { bootstrap } from "./shell/start.js";
+
+bindShellEvents();
+bindRepositoriesEvents();
+bindStorageEvents();
+bindCleanupEvents();
+bindScanningEvents();
+bindSecurityEvents();
+bindSystemEvents();
+bindAuditEvents();
+bindMigrationEvents();
+bootstrap();

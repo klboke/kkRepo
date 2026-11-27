@@ -1,25 +1,21 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
-const source = readFileSync(resolve(__dirname,
-  "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-function section(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 
 test("file deletion waits for confirmation and cancels after the selection changes", async () => {
   for (const selectionChanged of [false, true]) {
     let answer;
     const requests = [];
     const state = { repo: "hosted", path: "release/a" };
-    const context = vm.createContext({
+    const context = declarations.context({
       state, URLSearchParams, canDeleteBrowseDirectory: () => false,
       currentRepository: () => ({ format: "raw" }),
       window: { kkrepoConfirmDelete: () => new Promise(resolve => { answer = resolve; }) },
       fetch: async (...args) => { requests.push(args); return { ok: true }; },
       refreshTreeAfterDeletion: async () => {},
     });
-    vm.runInContext(section("async function deleteBrowseEntry", "async function previewDirectoryDeletion"), context);
+    vm.runInContext(declarations("deleteBrowseEntry"), context);
     const pending = context.deleteBrowseEntry({ path: "release/a", leaf: true }, { isConnected: true });
     assert.equal(requests.length, 0);
     if (selectionChanged) state.path = "release/b";
@@ -53,7 +49,7 @@ function dialogContext(response) {
   const removed = [];
   const location = {};
   const navigation = new Map();
-  const context = vm.createContext({
+  const context = declarations.context({
     document: { createElement: () => dialog, body: { appendChild() {} } },
     state: { repo: "hosted", path: "release" },
     escapeHtml: value => String(value).replaceAll("<", "&lt;"), formatBytes: size => String(size),
@@ -66,7 +62,7 @@ function dialogContext(response) {
       removeEventListener: name => navigation.delete(name),
     },
   });
-  vm.runInContext(section("function showDirectoryDeletionDialog", "async function refreshTreeAfterDeletion"), context);
+  vm.runInContext(declarations("showDirectoryDeletionDialog"), context);
   context.showDirectoryDeletionDialog("hosted", { path: "release" }, {
     path: "release", assetCount: 2, componentCount: 1, estimatedBytes: 10, metadataAssetCount: 0,
     selectionToken: "reviewed-token", items: [{ path: "release/<a>", action: "DELETE" }],
@@ -84,8 +80,8 @@ test("navigation cancels a directory preview without deleting and releases liste
 
 test("directory action is limited to hosted supported formats and administrators", () => {
   let repo = { type: "hosted", format: "raw" }; let authorized = true;
-  const context = vm.createContext({ currentRepository: () => repo, canDeleteBrowseContent: () => authorized });
-  vm.runInContext(section("function canDeleteBrowseDirectory", "function hasUploadPermission"), context);
+  const context = declarations.context({ currentRepository: () => repo, canDeleteBrowseContent: () => authorized });
+  vm.runInContext(declarations("canDeleteBrowseDirectory", "canDeleteBrowseComponentDirectory"), context);
   const entry = { path: "release", leaf: false };
   assert.equal(context.canDeleteBrowseDirectory(entry), true);
   for (const type of ["proxy", "group"]) { repo = { type, format: "raw" }; assert.equal(context.canDeleteBrowseDirectory(entry), false); }
@@ -134,7 +130,7 @@ test("deletion refresh preserves scroll and surviving expanded directories", asy
   const state = { repo: "hosted", path: "release/a", source: "" };
   const expanded = new Set(["hosted::release", "hosted::other", "hosted::release/a"]);
   const detail = {};
-  const context = vm.createContext({
+  const context = declarations.context({
     state, expanded, treeCache: new Map(),
     document: { querySelector: () => tree, getElementById: () => root },
     loadAndRenderTreeLevel: async () => { assert.equal(root.style.minHeight, "1200px"); tree.scrollTop = 0; },
@@ -143,7 +139,7 @@ test("deletion refresh preserves scroll and surviving expanded directories", asy
     window: { history: { replaceState() {} } }, repositoryBrowseHash: () => "#browse/repository/hosted",
     detailPaneMount: () => detail,
   });
-  vm.runInContext(section("async function refreshTreeAfterDeletion", "async function settleExpandedTreeLoads"), context);
+  vm.runInContext(declarations("refreshTreeAfterDeletion"), context);
   await context.refreshTreeAfterDeletion("hosted", { path: "release/a" });
   assert.equal(tree.scrollTop, 850); assert.equal(tree.scrollLeft, 20);
   assert.equal(root.style.minHeight, "");
@@ -151,21 +147,19 @@ test("deletion refresh preserves scroll and surviving expanded directories", asy
   assert.equal(expanded.has("hosted::release/a"), false);
 });
 
-
 test("ordinary directories without package coordinates still render their action panel", async () => {
   let rendered;
-  const context = vm.createContext({
+  const context = declarations.context({
     state: { repo: "hosted", path: "releases" }, detailPaneMount: () => ({ isConnected: true }),
     usageDetailForEntry: async () => null, repositoryFormatIcon: () => "icon", canDeleteBrowseDirectory: () => true,
     renderDetailPane: detail => { rendered = detail; },
   });
-  vm.runInContext(section("async function showComponentDetail", "async function showAssetDetail"), context);
+  vm.runInContext(declarations("showComponentDetail"), context);
   await context.showComponentDetail({ path: "releases", leaf: false });
   assert.equal(rendered.crumbText, "releases");
   assert.equal(rendered.deleteEntry.path, "releases");
   assert.equal(rendered.summaryRows[0][1], "hosted");
 });
-
 
 test("expired session closes confirmation, clears authentication and redirects", async () => {
   const { controls, dialog, removed, location } = dialogContext({ ok: false, status: 401 });
@@ -179,7 +173,7 @@ test("expired session closes confirmation, clears authentication and redirects",
 
 test("expired preview clears authentication without opening a dialog or reporting a delete error", async () => {
   const removed = []; const location = {}; const button = { disabled: false, textContent: "Delete" };
-  const context = vm.createContext({
+  const context = declarations.context({
     canDeleteBrowseDirectory: () => true, state: { repo: "hosted", path: "release" },
     URLSearchParams, fetch: async () => ({ ok: false, status: 401 }),
     sessionStorage: { removeItem: key => removed.push(key) }, AUTH_SNAPSHOT_KEY: "auth",
@@ -187,7 +181,7 @@ test("expired preview clears authentication without opening a dialog or reportin
     showDirectoryDeletionDialog: () => assert.fail("expired session must not open preview"),
     deleteError: () => assert.fail("401 is not a deletion error"),
   });
-  vm.runInContext(section("async function previewDirectoryDeletion", "function showDirectoryDeletionDialog"), context);
+  vm.runInContext(declarations("previewDirectoryDeletion"), context);
   await context.previewDirectoryDeletion({ path: "release" }, button);
   assert.deepEqual(removed, ["auth"]);
   assert.equal(location.href, "/browse/#browse/welcome");
@@ -195,11 +189,10 @@ test("expired preview clears authentication without opening a dialog or reportin
   assert.equal(button.textContent, "Delete");
 });
 
-
 test("usage snippets for unsupported prefixes never grant a delete action", async () => {
   let repo; let rendered; let entry;
   const state = { repo: "repo", path: "" };
-  const context = vm.createContext({
+  const context = declarations.context({
     state, currentRepository: () => repo, canDeleteBrowseContent: () => true,
     pathSegments: path => path.split("/").filter(Boolean), VERSION_DIR_RE: /^\d/,
     hasDirectoryUsage: () => false,
@@ -209,9 +202,9 @@ test("usage snippets for unsupported prefixes never grant a delete action", asyn
     window: { kkrepoConfirmDelete: () => assert.fail("unsupported directory must not confirm deletion") },
     fetch: () => assert.fail("unsupported directory must not call the legacy DELETE endpoint"),
   });
-  vm.runInContext(section("function canDeleteBrowseDirectory", "function hasUploadPermission"), context);
-  vm.runInContext(section("async function showComponentDetail", "async function showAssetDetail"), context);
-  vm.runInContext(section("async function deleteBrowseEntry", "async function previewDirectoryDeletion"), context);
+  vm.runInContext(declarations("canDeleteBrowseDirectory", "canDeleteBrowseComponentDirectory"), context);
+  vm.runInContext(declarations("showComponentDetail"), context);
+  vm.runInContext(declarations("deleteBrowseEntry"), context);
   for (const format of ["huggingface", "conan", "raw", "terraform"]) {
     for (const type of ["hosted", "proxy", "group"]) {
       for (const path of ["", "123", "owner/model", "v1"]) {

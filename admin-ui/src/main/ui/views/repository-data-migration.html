@@ -1,0 +1,30 @@
+        <section class="view" id="repository-data-migration-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-arrow-left-right" aria-hidden="true"></span></span>
+            <h1>Nexus Repository Data</h1>
+            <span class="heading-copy">Discover and migrate hosted repository assets from Nexus</span>
+          </div>
+          <form class="blobstore-form" id="repository-data-migration-form" novalidate>
+            <div class="form-grid">
+              <label><span>Source URL <span class="required-mark">*</span></span><input id="repository-data-migration-source-url" type="url" value="http://localhost:28090/" required></label>
+              <label><span>Source username <span class="required-mark">*</span></span><input id="repository-data-migration-source-username" type="text" value="admin" required></label>
+              <label><span>Source password <span class="required-mark">*</span></span><input id="repository-data-migration-source-password" type="password" autocomplete="new-password" required></label>
+              <label><span>Page size</span><input id="repository-data-migration-page-size" type="number" min="100" max="5000" value="1000"></label>
+              <label><span>Concurrency</span><input id="repository-data-migration-concurrency" type="number" min="1" max="64" value="8"></label>
+              <label><span>Metadata since</span><input id="repository-data-migration-metadata-since" type="datetime-local"></label>
+              <label class="checkbox-field">
+                <input id="repository-data-migration-checksum-validation" type="checkbox" checked>
+                <span>Validate size</span>
+              </label>
+              <label class="full-width"><span>Optional proxy repositories</span><textarea id="repository-data-migration-backup-proxies" rows="2" spellcheck="false" placeholder="maven-proxy-backup"></textarea></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="repository-data-migration-start-button" type="button">Sync metadata</button>
+              <button class="create-button secondary" id="repository-data-migration-metadata-button" type="button">Continue metadata</button>
+              <button class="create-button" id="repository-data-migration-packages-button" type="button">Sync packages</button>
+              <button class="create-button secondary" id="repository-data-migration-retry-failed-button" type="button">Retry failed</button>
+              <button class="create-button secondary" id="repository-data-migration-refresh-button" type="button">Refresh jobs</button>
+            </div>
+          </form>
+          <div class="migration-result" id="repository-data-migration-result" hidden></div>
+        </section>

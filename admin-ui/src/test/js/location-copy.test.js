@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function setup(clipboard, copyResult = true) {
   const copied = [], messages = [];
@@ -25,9 +23,9 @@ function setup(clipboard, copyResult = true) {
     },
     showToast: (message, tone) => messages.push({message, tone}),
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function escapeHtml('), source.indexOf('\n}', source.indexOf('function escapeHtml(')) + 2)
-    + source.slice(source.indexOf('function renderCopyableLocation('), source.indexOf('// undefined = loading;')), context);
+  declarations.context(context);
+  vm.runInContext(declarations("escapeHtml")
+    + declarations("renderCopyableLocation", "copyLocationValue", "copyLocationText"), context);
   return { context, copied, messages, cleanup: () => ({removed, restoredFocus}) };
 }
 

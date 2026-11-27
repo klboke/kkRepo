@@ -6,7 +6,6 @@ const vm = require("node:vm");
 
 const assets = resolve(__dirname, "../../main/resources/META-INF/resources/login/assets");
 const csrf = readFileSync(resolve(assets, "csrf-fetch.js"), "utf8");
-const menu = readFileSync(resolve(assets, "account-menu.js"), "utf8");
 
 function csrfContext(cookie = "KKREPO_CSRF=first") {
   const calls = [];
@@ -82,8 +81,8 @@ function menuContext() {
     },
     clearTimeout: (id) => timers.delete(id),
   });
-  vm.runInContext(menu, context);
-  return { api: context.window.nexusPlusAccountMenu, elements, timers };
+  const module = require("../../../../scripts/ui/module-fixture.cjs")("admin", "../shared/account-menu", context);
+  return { api: {open: module.openUserMenu, close: module.closeUserMenu, toggle: module.toggleUserMenu, scheduleClose: module.scheduleCloseUserMenu}, elements, timers };
 }
 
 test("account menu maintains accessible state and cancels stale delayed closes", () => {
@@ -117,21 +116,19 @@ test("account menu maintains accessible state and cancels stale delayed closes",
 test("both UI entrypoints load shared scripts before their consumers", () => {
   const root = resolve(__dirname, "../../../..");
   for (const page of ["admin", "browse"]) {
-    const base = resolve(root, `${page}-ui/src/main/resources/META-INF/resources/${page}`);
+    const base = resolve(root, `${page}-ui/target/generated-ui/META-INF/resources/${page}`);
     const html = readFileSync(resolve(base, "index.html"), "utf8");
-    const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
+    const scripts = [...html.matchAll(/<script (?:type="module" )?src="([^"]+)"/g)].map((match) => match[1]);
     const csrfIndex = scripts.findIndex((src) => src.startsWith("/login/assets/csrf-fetch.js?"));
-    const menuIndex = scripts.findIndex((src) => src.startsWith("/login/assets/account-menu.js?"));
     const safeReturnToIndex = scripts.findIndex((src) =>
       src.startsWith("/login/assets/safe-return-to.js?"));
     const confirmationIndex = scripts.findIndex((src) => src.startsWith("/login/assets/delete-confirmation.js?"));
     const consumerIndex = scripts.findIndex((src) => src.includes(`/assets/${page}.js?`));
     assert.ok(csrfIndex >= 0 && csrfIndex < consumerIndex);
-    assert.ok(menuIndex >= 0 && menuIndex < consumerIndex);
     assert.ok(safeReturnToIndex >= 0 && safeReturnToIndex < consumerIndex);
     assert.ok(confirmationIndex >= 0 && confirmationIndex < consumerIndex);
     const source = readFileSync(resolve(base, `assets/${page}.js`), "utf8");
-    assert.ok(source.includes("window.nexusPlusAccountMenu"));
+    assert.ok(source.includes("function toggleUserMenu"));
     assert.ok(!source.includes("function installCsrfFetch"));
     if (page === "browse") {
       const loginModalIndex = scripts.findIndex((src) => src.includes("login-modal.js?"));

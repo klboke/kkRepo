@@ -1,11 +1,11 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
-const index = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/index.html'), 'utf8');
+const index = readFileSync(join(__dirname, '../../../target/generated-ui/META-INF/resources/admin/index.html'), 'utf8');
 
 function actionHarness() {
   const attributes = new Map();
@@ -54,18 +54,17 @@ function actionHarness() {
     showToast: (message, type) => toasts.push([message, type]),
     closeCleanupPolicyActionMenu() {},
   };
-  vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('async function responseErrorMessage('),
-    source.indexOf('async function saveBlobStore(')), context);
+  declarations.context(context);
+  vm.runInContext(declarations("responseErrorMessage"), context);
   vm.runInContext(`let blobStores = [{ id: 7, name: 'unused' }];
     let blobActionMenuStoreId = null, blobActionMenuTrigger = null;
-    ${source.slice(source.indexOf('async function deleteBlobStore('), source.indexOf('// ---- Repository form'))}`, context);
-  vm.runInContext(source.slice(
-    source.indexOf('document.getElementById("blobstore-table").addEventListener("click", (event) => {\n  const editButton'),
-    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("click"')), context);
-  vm.runInContext(source.slice(
-    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("click"'),
-    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("focusout"')), context);
+    ${declarations(
+      "deleteBlobStore", "showBlobStoreRepositories", "blobActionMenuItems",
+      "positionBlobStoreActionMenu", "closeBlobStoreActionMenu", "openBlobStoreActionMenu",
+      "handleBlobStoreActionMenuKeydown",
+    )}`, context);
+  vm.runInContext(declarations("bindBlobStoreRowActions", "bindBlobStoreTableKeys") + "bindBlobStoreRowActions(); bindBlobStoreTableKeys();", context);
+  vm.runInContext(declarations("bindBlobStoreMenuActions") + "bindBlobStoreMenuActions();", context);
   return { context, menu, trigger, document, attributes, requests, toasts, tableHandlers, menuHandlers };
 }
 
@@ -172,9 +171,9 @@ test('each store row keeps Edit visible and moves secondary actions into overflo
     renderInventoryMetric: () => '0', renderCopyableLocation: () => '',
     escapeHtml: String, pathStyleBadge: () => '',
   };
-  vm.createContext(context);
+  declarations.context(context);
   vm.runInContext(`let blobStoreSort = { key: 'name', direction: 'asc' }, blobStoreUsage = null;
-    ${source.slice(source.indexOf('function renderBlobStores()'), source.indexOf('function renderCopyableLocation('))}`, context);
+    ${declarations("renderBlobStores")}`, context);
   context.renderBlobStores();
   assert.match(table.innerHTML, /edit-blobstore-button[^>]*>Edit<\/button>/);
   assert.match(table.innerHTML, /blobstore-more-actions[^>]*aria-haspopup="menu"/);

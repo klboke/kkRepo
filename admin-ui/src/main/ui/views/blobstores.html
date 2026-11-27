@@ -1,0 +1,154 @@
+        <section class="view fixed-table-view" id="blobstores-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-database" aria-hidden="true"></span></span>
+            <h1>Blob Stores</h1>
+            <span class="heading-copy">Manage blob stores</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-blobstore-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create blob store</button>
+            <label class="filter-box">
+              <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
+              <input id="blobstore-filter" type="search" placeholder="Filter">
+            </label>
+            <button class="create-button secondary" id="blobstore-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+          </div>
+          <div class="usage-overview">
+            <div class="summary-grid" id="blobstore-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="blobstore-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching blob stores</span><strong id="blobstore-usage-matching">0</strong></div>
+              <div><span>Blob Count</span><strong id="blobstore-usage-count">…</strong></div>
+              <div><span class="field-label"><span>Stored blob size</span><span class="field-help" tabindex="0" role="note" aria-label="Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history." data-tooltip="Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="blobstore-usage-size">…</strong></div>
+              <div><span>Pending cleanup</span><strong id="blobstore-usage-pending">…</strong></div>
+            </div>
+          </div>
+          <div class="form-modal" id="blobstore-form-modal" data-form-id="blobstore-form" role="dialog" aria-modal="true" aria-labelledby="blobstore-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="blobstore-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="blobstore-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+          <form class="blobstore-form modal-form" id="blobstore-form" hidden novalidate>
+            <div class="form-title" id="blobstore-form-title">Create blob store</div>
+            <div class="form-grid">
+              <label>
+                <span>Name <span class="required-mark">*</span></span>
+                <input id="blobstore-name" name="name" type="text" autocomplete="off" required>
+              </label>
+              <label>
+                <span>Engine</span>
+                <select id="blobstore-engine" name="engine">
+                  <option value="aws-s3">AWS S3 SDK</option>
+                  <option value="oss-native">OSS Native SDK</option>
+                  <option value="azure">Azure Blob Storage</option>
+                  <option value="file">File</option>
+                </select>
+              </label>
+              <label class="object-store-only">
+                <span>Endpoint <span class="required-mark">*</span></span>
+                <input id="blobstore-endpoint" name="endpoint" type="url" required>
+              </label>
+              <label class="s3-only">
+                <span>Region <span class="required-mark">*</span></span>
+                <input id="blobstore-region" name="region" type="text" required>
+              </label>
+              <label class="azure-only" hidden>
+                <span>Account name <span class="required-mark">*</span></span>
+                <input id="blobstore-account-name" name="accountName" type="text" autocomplete="off">
+              </label>
+              <label class="object-store-only">
+                <span><span id="blobstore-bucket-label">Bucket</span> <span class="required-mark">*</span></span>
+                <input id="blobstore-bucket" name="bucket" type="text" required>
+              </label>
+              <label class="object-store-only">
+                <span>Prefix</span>
+                <input id="blobstore-prefix" name="prefix" type="text" autocomplete="off">
+              </label>
+              <label class="file-only" hidden>
+                <span>Path <span class="required-mark">*</span></span>
+                <input id="blobstore-path" name="path" type="text" autocomplete="off">
+              </label>
+              <label class="s3-only">
+                <span class="field-label">Credentials
+                  <span id="blobstore-credential-help" class="field-help" tabindex="0" role="note" aria-label="Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys." data-tooltip="Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="blobstore-credential-source" name="credentialSource">
+                  <option value="default">Default AWS credentials</option>
+                  <option value="static">Static access key / secret key</option>
+                </select>
+              </label>
+              <label class="s3-only static-credentials">
+                <span>Access key <span class="required-mark">*</span></span>
+                <input id="blobstore-access-key" name="accessKey" type="text" autocomplete="off">
+              </label>
+              <label class="s3-only static-credentials">
+                <span>Secret key <span class="required-mark">*</span></span>
+                <input id="blobstore-secret-key" name="secretKey" type="password" autocomplete="new-password">
+              </label>
+              <label class="azure-only" hidden>
+                <span class="field-label">Credentials
+                  <span id="blobstore-azure-credential-help" class="field-help" tabindex="0" role="note" aria-label="Managed identity and workload identity use platform tokens and store no secret. Selecting them clears any saved account key or SAS token." data-tooltip="Managed identity and workload identity use platform tokens and store no secret. Selecting them clears any saved account key or SAS token.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="blobstore-azure-credential-type" name="credentialType">
+                  <option value="default">Default Azure credentials</option>
+                  <option value="managed-identity">Managed identity</option>
+                  <option value="workload-identity">Workload identity</option>
+                  <option value="account-key">Account key</option>
+                  <option value="sas">SAS token</option>
+                </select>
+              </label>
+              <label class="azure-only azure-identity-fields" hidden>
+                <span>Client ID</span>
+                <input id="blobstore-azure-client-id" name="clientId" type="text" autocomplete="off" placeholder="User-assigned identity; blank uses system-assigned">
+              </label>
+              <label class="azure-only azure-workload-fields" hidden>
+                <span>Tenant ID</span>
+                <input id="blobstore-azure-tenant-id" name="tenantId" type="text" autocomplete="off" placeholder="Blank inherits AZURE_TENANT_ID">
+              </label>
+              <label class="azure-only azure-token-file-fields" hidden>
+                <span>Token file path</span>
+                <input id="blobstore-azure-token-file" name="tokenFilePath" type="text" autocomplete="off" placeholder="Blank inherits AZURE_FEDERATED_TOKEN_FILE">
+              </label>
+              <label class="azure-only azure-account-key-fields" hidden>
+                <span>Account key <span class="required-mark">*</span></span>
+                <input id="blobstore-azure-account-key" name="accountKey" type="password" autocomplete="new-password">
+              </label>
+              <label class="azure-only azure-sas-fields" hidden>
+                <span>SAS token <span class="required-mark">*</span></span>
+                <input id="blobstore-azure-sas-token" name="sasToken" type="password" autocomplete="new-password">
+              </label>
+              <label class="checkbox-field s3-only">
+                <input id="blobstore-path-style" name="pathStyleAccess" type="checkbox" checked>
+                <span>Path style access</span>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-blobstore-button" type="button" title="Save this Blob Store configuration.">Save blob store</button>
+              <button class="create-button secondary" id="cancel-blobstore-button" type="button">Cancel</button>
+            </div>
+          </form>
+            </div>
+          </div>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table blobstores-table usage-table">
+              <thead>
+                <tr>
+                  <th class="icon-column"></th>
+                  <th aria-sort="ascending"><button class="repo-sort-button is-active" data-blobstore-sort="name" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span><span>Name</span></button></th>
+                  <th>Engine / Type</th>
+                  <th>Health</th>
+                  <th class="inventory-count" title="Registered blobs; shared blobs count once. Includes blobs awaiting cleanup." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="blobCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Blob Count</span></button></th>
+                  <th class="inventory-count" aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Stored size</span></button></th>
+                  <th class="inventory-count" title="Soft-deleted blobs still waiting for physical cleanup. This space has not been freed yet." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="pendingDeletionBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Pending cleanup</span></button></th>
+                  <th>Storage location</th>
+                  <th class="actions-column">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="blobstore-table"></tbody>
+            </table>
+          </div>
+        </section>

@@ -1,0 +1,601 @@
+
+.side-icon {
+  width: 22px;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.side-caret {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.side-item:hover,
+.side-item.is-active,
+.side-subitem:hover,
+.side-subitem.is-active {
+  background: var(--active);
+  color: var(--active-ink);
+  box-shadow: var(--shadow-nav);
+}
+
+.side-item.is-active .side-icon,
+.side-item:hover .side-icon,
+.side-item.is-active .side-caret,
+.side-item:hover .side-caret {
+  color: #ffffff;
+}
+
+.nx-content {
+  background: #ffffff;
+}
+
+.page-heading {
+  min-height: 86px;
+  margin: 0 24px;
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.heading-icon {
+  display: inline-grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 20px;
+}
+
+h1 {
+  color: var(--ink-1);
+  font-size: var(--fs-3xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+  line-height: var(--lh-tight);
+}
+
+h2 {
+  color: var(--ink-1);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-bold);
+}
+
+.heading-copy {
+  color: var(--muted);
+  font-size: var(--fs-base);
+}
+
+.admin-bootstrap-panel,
+.token-panel,
+.panel,
+.detail-crumb,
+.snippet {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-bootstrap-panel,
+.token-layout {
+  margin: 18px 24px;
+}
+
+.format-showcase {
+  width: calc(100% - 48px);
+  max-width: 1120px;
+  margin: 18px 24px 24px;
+}
+
+.format-showcase-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+}
+
+.format-showcase-heading h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.format-showcase-heading p,
+.format-showcase-count,
+.format-modes,
+.token-note,
+.detail-placeholder,
+.result-note {
+  color: var(--muted);
+}
+
+.format-showcase-heading p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.format-showcase-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.format-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0;
+  list-style: none;
+}
+
+.format-item {
+  display: flex;
+  min-width: 0;
+  min-height: 72px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  padding: 12px 14px;
+  cursor: default;
+}
+
+.format-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.format-brand strong {
+  min-width: 0;
+  color: var(--ink-1);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* "Tool / Ecosystem" formats: the tool on the first line, the ecosystem smaller below. */
+.format-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.format-name small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.format-modes {
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+}
+
+.table-tools,
+.search-form,
+.upload-layout {
+  padding-right: 24px;
+  padding-left: 24px;
+}
+
+.table-tools {
+  height: 52px;
+  align-items: center;
+  padding-top: 12px;
+  padding-bottom: 8px;
+}
+
+.filter-box,
+.search-form input,
+.search-form select,
+.upload-form input,
+.upload-form select,
+.upload-form textarea,
+.usage-pick,
+.member-filter {
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.filter-box {
+  width: 260px;
+  height: 36px;
+  box-shadow: inset 0 1px 0 rgba(34, 49, 46, 0.03);
+}
+
+.filter-icon {
+  color: var(--active);
+  font-size: 16px;
+}
+
+.filter-box input::placeholder,
+.search-form input::placeholder {
+  color: #97a39f;
+}
+
+.nx-table-frame {
+  margin: 0 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.nx-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.nx-table th,
+.nx-table td {
+  height: 44px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.nx-table th {
+  height: 42px;
+  background: var(--header);
+  color: var(--table-head-ink);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.nx-table tbody tr:nth-child(odd),
+.nx-table tbody tr:nth-child(even) {
+  background: var(--row);
+}
+
+.nx-table tbody tr:hover {
+  background: var(--row-hover);
+}
+
+.nx-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.repo-sort-button:hover,
+.repo-sort-button.is-active,
+.repo-url-link,
+.tree-label.clickable:hover {
+  color: var(--active);
+}
+
+.repo-icon,
+.component-icon {
+  color: #40504b;
+}
+
+.repo-icon.group {
+  color: #b77a22;
+}
+
+.repo-icon.proxy {
+  color: #596d8f;
+}
+
+.copy-button,
+.repo-copy-button,
+.criteria-button,
+.secondary-button,
+.upload-button,
+.admin-bootstrap-button,
+.detail-delete-button,
+.analyze-btn,
+.usage-copy {
+  border-radius: 8px;
+  font-weight: var(--fw-bold);
+}
+
+.criteria-button,
+.upload-button,
+.admin-bootstrap-button {
+  border: 1px solid var(--active);
+  background: var(--active);
+  color: #ffffff;
+  box-shadow: var(--shadow-nav);
+}
+
+.criteria-button:hover,
+.upload-button:hover,
+.admin-bootstrap-button:hover {
+  background: var(--brand-strong);
+  transform: translateY(-1px);
+}
+
+.criteria-button:active,
+.upload-button:active,
+.admin-bootstrap-button:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-press);
+}
+
+.secondary-button,
+.criteria-button.secondary,
+.copy-button,
+.repo-copy-button,
+.usage-copy,
+.analyze-btn {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--text);
+}
+
+.secondary-button:hover,
+.criteria-button.secondary:hover,
+.copy-button:hover,
+.repo-copy-button:hover,
+.usage-copy:hover,
+.analyze-btn:hover {
+  border-color: var(--active);
+  background: var(--brand-tint);
+  color: var(--active);
+}
+
+.secondary-button:active,
+.criteria-button.secondary:active,
+.copy-button:active,
+.repo-copy-button:active,
+.usage-copy:active,
+.analyze-btn:active {
+  background: var(--brand-tint-strong);
+  box-shadow: var(--shadow-press);
+}
+
+.repo-copy-button.copied,
+.usage-copy.copied {
+  border-color: var(--active);
+  background: var(--active);
+  color: #ffffff;
+}
+
+.search-form {
+  gap: 10px;
+  padding-top: 16px;
+  padding-bottom: 12px;
+}
+
+.search-form label,
+.search-format-field,
+.upload-form label,
+.admin-bootstrap-grid label,
+.token-form label {
+  color: #344641;
+  font-size: 13px;
+  font-weight: var(--fw-bold);
+}
+
+.search-form input,
+.search-form select,
+.upload-form input,
+.upload-form select {
+  height: 36px;
+}
+
+.result-note {
+  margin: 0 24px 10px;
+  font-size: 13px;
+}
+
+.upload-layout {
+  padding-top: 18px;
+}
+
+.upload-form,
+.token-panel,
+.admin-bootstrap-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+  padding: 18px;
+}
+
+.upload-asset-row {
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #f8faf8;
+}
+
+.token-layout {
+  gap: 14px;
+}
+
+.token-value,
+code,
+.snippet,
+.kv-val code {
+  border-radius: 6px;
+  background: #f2f5f3;
+  color: #1c3934;
+}
+
+.browse-split {
+  margin: 0 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+#browse-drill .browse-split {
+  margin-top: 18px;
+}
+
+.tree-left {
+  border-right: 1px solid var(--line);
+}
+
+.detail-right {
+  background: #fbfcfb;
+}
+
+.tree-label {
+  color: var(--text);
+}
+
+.tree-loading,
+.tree-empty,
+.tree-empty-child {
+  color: var(--muted);
+}
+
+.tree-error {
+  color: var(--danger);
+}
+
+.detail-crumb {
+  box-shadow: none;
+}
+
+.panel {
+  box-shadow: none;
+}
+
+.panel-head {
+  border-bottom-color: var(--line);
+  background: var(--header);
+  color: #263632;
+}
+
+.detail-delete-button {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+  color: #a54830;
+}
+
+.detail-delete-button:hover {
+  background: var(--danger-bg);
+}
+
+.health-score {
+  color: #364844;
+}
+
+.health-muted {
+  color: #9ea9a5;
+}
+
+@media (max-width: 980px) {
+  .nx-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .nx-topbar {
+    min-height: 56px;
+  }
+
+  .product {
+    width: auto;
+    min-width: min(100%, 260px);
+  }
+
+  .side-nav {
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    overflow-x: auto;
+  }
+
+  .page-heading,
+  .nx-table-frame,
+  .browse-split,
+  .format-showcase,
+  .admin-bootstrap-panel,
+  .token-layout {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .format-showcase {
+    width: calc(100% - 32px);
+  }
+
+  .table-tools,
+  .search-form,
+  .upload-layout {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .upload-spec-asset-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .upload-spec-asset-row .upload-file,
+  .upload-spec-asset-row .upload-file:only-child {
+    grid-column: 1;
+  }
+
+  .format-showcase-heading {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .format-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .format-item {
+    min-height: 78px;
+    padding: 10px;
+  }
+
+  .format-brand {
+    align-items: center;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .format-logo {
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
+  }
+}
+
+/* Keep the Browse repository filter visually inside the page heading. */
+
+#browse-view {
+  position: relative;
+}
+
+#browse-view .page-heading {
+  padding-right: 330px;
+}
+
+#browse-view .table-tools {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 2;
+  width: min(272px, calc(100% - 48px));
+  height: auto;
+  padding: 0;
+}

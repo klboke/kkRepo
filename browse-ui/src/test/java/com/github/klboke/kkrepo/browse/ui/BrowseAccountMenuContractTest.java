@@ -24,9 +24,9 @@ class BrowseAccountMenuContractTest {
     assertFalse(index.contains("current-user-source"));
     assertTrue(index.contains("user-menu-item-icon lucide-icon icon-key-round"));
     assertTrue(index.contains("user-menu-signout-icon lucide-icon icon-log-in"));
-    assertTrue(index.contains("/login/assets/login-modal.css?v=20260818-login-icons-1"));
-    assertTrue(index.contains("/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"));
-    assertTrue(index.contains("/login/assets/login-modal.js?v=20261023-safe-return-to-1"));
+    assertTrue(index.contains("/login/assets/login-modal.css?v="));
+    assertTrue(index.contains("/login/assets/safe-return-to.js?v="));
+    assertTrue(index.contains("/login/assets/login-modal.js?v="));
   }
 
   @Test
@@ -46,7 +46,7 @@ class BrowseAccountMenuContractTest {
     String index = resource("/META-INF/resources/browse/index.html");
     String stylesheet = resource("/META-INF/resources/browse/assets/account-menu.css");
 
-    assertTrue(index.contains("/browse/assets/account-menu.css?v=20260824-ui-themes-3"));
+    assertTrue(index.contains("/browse/assets/account-menu.css?v="));
     assertTrue(stylesheet.contains("width: 126px;\n  height: 40px;\n  min-width: 126px;\n  max-width: 126px;"));
     assertTrue(stylesheet.contains(".user-menu-trigger:focus-visible"));
     assertTrue(stylesheet.contains("@media (prefers-reduced-motion: reduce)"));

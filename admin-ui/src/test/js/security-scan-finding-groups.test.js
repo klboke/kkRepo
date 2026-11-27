@@ -1,9 +1,9 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {join} = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 const group = (fields) => ({
   maxSeverity: 'HIGH', findingCount: 1, advisoryCount: 1, artifactCount: 1,
@@ -19,10 +19,23 @@ function setup(respond = () => ({items: [], nextAfter: null})) {
       requests.push(parsed);
       return respond(parsed);
     }};
-  vm.createContext(c);
+  declarations.context(c);
   require('./authorization-fixture')(c);
-  vm.runInContext(source.slice(source.indexOf('let securityScanState ='), source.indexOf('let securityScanPolicyFormMode'))
-    + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()')), c);
+  vm.runInContext(declarations(
+    "securityScanState", "SECURITY_SCAN_DEFAULT_PAGE_SIZE", "securityScanListEndpoints",
+    "securityScanPages", "securityScanFindingTreeExpanded",
+  )
+    + declarations(
+      "securityScanPageParams", "securityScanFindingRootGroupBy", "securityScanFindingChildGroupBy",
+      "securityScanFindingGroupNode", "securityScanFindingNodes", "findSecurityScanFindingNode",
+      "refreshSecurityScanFindingTree", "securityScanListItems", "setSecurityScanListItems",
+      "restoreSecurityScanFindingNodes", "toggleSecurityScanFindingNode",
+      "loadSecurityScanFindingNodeChildren", "showMoreSecurityScanFindingNode", "fetchSecurityScanPage",
+      "resetSecurityScanPage", "renderSecurityScanPagination", "renderSecurityScanList",
+      "loadSecurityScanList", "searchSecurityScanList", "clearSecurityScanListSearch",
+      "moveSecurityScanPage", "sortSecurityScanPage", "filterCurrentSecurityScanFindings",
+      "SECURITY_SCAN_FINDING_SWITCHES", "filterSecurityScanFindings", "resizeSecurityScanPage",
+    ), c);
   c.renderSecurityScanList = () => {};
   c.renderSecurityScanFindings = () => {};
   return {c, requests, run: (code) => vm.runInContext(code, c)};
@@ -192,9 +205,13 @@ test('group rows escape labels, shorten digests, and offer more rows only when a
     securityScanCanMutate: () => true,
     securityScanState: {findingGroups: [], findings: []},
     document: {getElementById: () => c.table}, table: {innerHTML: ''}};
-  vm.createContext(c);
-  vm.runInContext(source.slice(source.indexOf('const SECURITY_SCAN_SEVERITY_PRESENTATION'), source.indexOf('function renderSecurityScanSeverity('))
-    + source.slice(source.indexOf('function renderSecurityScanFindingRow('), source.indexOf('function renderSecurityScanFindingWaiverStatus(')), c);
+  declarations.context(c);
+  vm.runInContext(declarations("SECURITY_SCAN_SEVERITY_PRESENTATION")
+    + declarations(
+      "renderSecurityScanFindingRow", "renderSecurityScanFindings", "SECURITY_SCAN_FINDING_GROUP_KINDS",
+      "securityScanFindingGroupLabel", "renderSecurityScanFindingGroupCounts",
+      "appendSecurityScanFindingNodeRows",
+    ), c);
   const digest = `sha256:${'a'.repeat(64)}`;
   c.securityScanState.findingGroups = [{
     key: '["ARTIFACT",{}]', groupBy: 'ARTIFACT', level: 0, expanded: true, loaded: true,
@@ -258,9 +275,17 @@ function packageWaiverSetup({answer = true, replaced = [], postStatus = 200} = {
       }
       return {ok: postStatus === 200, status: postStatus, json: async () => ({created: [{id: 70}], replaced})};
     }};
-  vm.createContext(c);
+  declarations.context(c);
   vm.runInContext('const securityScanPackageWaiverRequiredFields = [];'
-    + source.slice(source.indexOf('// ---- Package waivers'), source.indexOf('async function securityScanTaskAction(')), c);
+    + declarations(
+      "securityScanPackageWaiverPackage", "securityScanPackageWaiverContext",
+      "securityScanPackageWaiverRequest", "securityScanPackageWaiverScopeValue",
+      "securityScanPackageLabel", "securityScanPackageWaiverScopeLabel",
+      "fetchSecurityScanPackageWaiverContext", "renderSecurityScanPackageWaiverReplaced",
+      "renderSecurityScanPackageWaiverContext", "showSecurityScanPackageWaiverForm",
+      "changeSecurityScanPackageWaiverScope", "hideSecurityScanPackageWaiverForm",
+      "createSecurityScanPackageWaiver",
+    ), c);
   return {c, calls, element, run: (code) => vm.runInContext(code, c)};
 }
 

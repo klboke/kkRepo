@@ -1,0 +1,106 @@
+          <section class="view" id="security-ldap-view">
+            <div class="page-heading">
+              <span class="heading-icon"><span class="lucide-icon icon-network" aria-hidden="true"></span></span>
+              <h1>LDAP</h1>
+              <span class="heading-copy">Manage LDAP connection, user mapping, and group roles</span>
+            </div>
+            <div class="security-provider-workspace">
+            <form class="blobstore-form security-provider-form" id="security-ldap-form" novalidate>
+              <div class="form-grid security-provider-form-grid">
+                <fieldset class="security-provider-section">
+                  <legend>Realm settings</legend>
+                  <p class="security-provider-section-copy">Enable the realm and control its place in the authentication order.</p>
+                  <div class="security-provider-section-grid security-provider-overview-grid">
+                    <label class="checkbox-field security-provider-toggle-field">
+                      <input id="security-ldap-enabled" type="checkbox">
+                      <span>Enabled</span>
+                    </label>
+                    <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-ldap-legacy-role-matching" type="checkbox">
+                    <span>Allow same-name roles without an explicit mapping</span>
+                  </label>
+                    <div class="security-provider-source" aria-label="Source LDAP, system managed">
+                      <span>Source</span>
+                      <div class="security-provider-source-value"><strong>LDAP</strong><small>System managed</small></div>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Server connection</legend>
+                  <p class="security-provider-section-copy">Use a complete URL, or configure the protocol, host, port, and search base separately.</p>
+                  <div class="security-provider-section-grid">
+                    <label><span>URL <span class="required-mark">*</span></span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
+                    <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
+                    <label><span>Host <span class="required-mark">*</span></span><input id="security-ldap-host" type="text"></label>
+                    <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
+                    <label><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Bind account</legend>
+                  <div class="security-provider-section-grid">
+                    <label><span>Auth scheme</span><input id="security-ldap-auth-scheme" type="text" value="simple"></label>
+                    <label><span>Auth realm</span><input id="security-ldap-auth-realm" type="text"></label>
+                    <label><span>Auth username</span><input id="security-ldap-auth-username" type="text"></label>
+                    <label><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>User mapping</legend>
+                  <div class="security-provider-section-grid">
+                    <label><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-user-subtree" type="checkbox" checked><span>User subtree</span></label>
+                    <label><span>User ID attribute</span><input id="security-ldap-user-id-attribute" type="text" value="uid"></label>
+                    <label><span>Real name attribute</span><input id="security-ldap-user-real-name-attribute" type="text" value="cn"></label>
+                    <label><span>Email attribute</span><input id="security-ldap-user-email-attribute" type="text" value="mail"></label>
+                    <label><span>User object class</span><input id="security-ldap-user-object-class" type="text" value="inetOrgPerson"></label>
+                    <label><span>MemberOf attribute</span><input id="security-ldap-user-member-of-attribute" type="text" value="memberOf"></label>
+                    <label><span>Password attribute</span><input id="security-ldap-user-password-attribute" type="text" value="userPassword"></label>
+                    <label><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Group mapping</legend>
+                  <div class="security-provider-section-grid">
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-groups-as-roles" type="checkbox" checked><span>Groups as roles</span></label>
+                    <label><span>Group type</span><select id="security-ldap-group-type"><option value="static">static</option><option value="dynamic">dynamic</option></select></label>
+                    <label><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-group-subtree" type="checkbox" checked><span>Group subtree</span></label>
+                    <label><span>Group ID attribute</span><input id="security-ldap-group-id-attribute" type="text" value="cn"></label>
+                    <label><span>Group member attribute</span><input id="security-ldap-group-member-attribute" type="text" value="member"></label>
+                    <label><span>Group member format</span><input id="security-ldap-group-member-format" type="text" value="${dn}"></label>
+                    <label><span>Group object class</span><input id="security-ldap-group-object-class" type="text" value="groupOfNames"></label>
+                  </div>
+                </fieldset>
+
+                <details class="security-provider-advanced">
+                  <summary><span>Advanced settings</span><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
+                  <div class="security-provider-advanced-body security-provider-section-grid">
+                    <label><span>Connection timeout</span><input id="security-ldap-connection-timeout" type="number" min="0" value="30"></label>
+                    <label><span>Retry delay</span><input id="security-ldap-retry-delay" type="number" min="0"></label>
+                    <label><span>Max incidents</span><input id="security-ldap-max-incidents" type="number" min="0"></label>
+                  </div>
+                </details>
+              </div>
+              <div class="form-actions security-provider-form-actions">
+                <button class="create-button" id="save-security-ldap-button" type="button">Save LDAP settings</button>
+              </div>
+            </form>
+            <aside class="security-provider-json-panel" aria-labelledby="security-ldap-json-title">
+              <div class="security-provider-json-heading">
+                <div>
+                  <h2 id="security-ldap-json-title">Configuration JSON</h2>
+                  <p id="security-ldap-json-description">Form and valid JSON changes sync automatically. Existing secrets are masked.</p>
+                </div>
+                <span class="security-provider-json-status" id="security-ldap-json-status" data-state="synced" role="status" aria-live="polite">Synced</span>
+              </div>
+              <textarea class="security-provider-json-editor" id="security-ldap-json-editor" aria-label="LDAP configuration JSON" aria-describedby="security-ldap-json-description" spellcheck="false">{}</textarea>
+            </aside>
+            </div>
+          </section>

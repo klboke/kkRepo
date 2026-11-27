@@ -1,0 +1,19 @@
+        <section class="view" id="nexus-migration-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-database-backup" aria-hidden="true"></span></span>
+            <h1>Nexus Metadata</h1>
+            <span class="heading-copy">Migrate Nexus users, roles, permissions, blob stores, and repository definitions</span>
+          </div>
+          <form class="blobstore-form" id="nexus-migration-form" novalidate>
+            <div class="form-grid">
+              <label><span>Source URL <span class="required-mark">*</span></span><input id="migration-source-url" type="url" value="http://localhost:28090/" required></label>
+              <label><span>Source username <span class="required-mark">*</span></span><input id="migration-source-username" type="text" value="admin" required></label>
+              <label><span>Source password <span class="required-mark">*</span></span><input id="migration-source-password" type="password" autocomplete="new-password" required></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="migration-preflight-button" type="button">Run preflight</button>
+              <button class="create-button" id="migration-run-button" type="button">Run migration</button>
+            </div>
+          </form>
+          <div class="migration-result" id="migration-result" hidden></div>
+        </section>

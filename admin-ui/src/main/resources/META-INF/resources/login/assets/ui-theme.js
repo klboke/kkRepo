@@ -24,8 +24,8 @@
       : DEFAULT_THEME;
   }
 
-  function stylesheetHref(theme) {
-    return `/browse/assets/themes/${encodeURIComponent(theme)}.css?v=20260826-nexus-a11y-1`;
+  function stylesheetHref(theme, version = "20260826-nexus-a11y-1") {
+    return `/browse/assets/themes/${encodeURIComponent(theme)}.css?v=${version}`;
   }
 
   function bind(documentRef, windowRef) {
@@ -41,7 +41,7 @@
         stylesheet.onerror = normalized === DEFAULT_THEME
           ? null
           : () => applyTheme(DEFAULT_THEME, [DEFAULT_THEME]);
-        stylesheet.setAttribute("href", stylesheetHref(normalized));
+        stylesheet.setAttribute("href", stylesheetHref(normalized, rootElement?.dataset?.themeVersion));
       }
       return normalized;
     }

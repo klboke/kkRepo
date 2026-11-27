@@ -5,7 +5,7 @@ const test = require("node:test");
 
 const browseRoot = resolve(
   __dirname,
-  "../../main/resources/META-INF/resources/browse",
+  "../../../target/generated-ui/META-INF/resources/browse",
 );
 
 test("keeps the expanded navigation inside the sidebar scroll container", () => {
@@ -20,9 +20,9 @@ test("keeps the expanded navigation inside the sidebar scroll container", () => 
 test("cache-busts the current Browse assets", () => {
   const html = readFileSync(resolve(browseRoot, "index.html"), "utf8");
 
-  assert.match(html, /browse\.css\?v=20261121-ui-alignment/);
-  assert.match(html, /browse\.js\?v=20261106-ohpm-management/);
-  assert.match(html, /format-icons\.css\?v=20261118-format-icons-1/);
+  assert.match(html, /browse\.css\?v=[a-f0-9]{16}/);
+  assert.match(html, /browse\.js\?v=[a-f0-9]{16}/);
+  assert.match(html, /format-icons\.css\?v=[a-f0-9]{16}/);
 });
 
 test("keeps the icon format picker below its trigger", () => {

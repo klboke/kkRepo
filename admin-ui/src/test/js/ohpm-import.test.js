@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { File } = require("node:buffer");
-const { groupFiles, form } = require("../../main/resources/META-INF/resources/admin/assets/ohpm-import.js");
+const { groupFiles, form } = require("../../main/ui/js/ohpm-import.js");
 
 function file(name, content = "archive", directory = "packages") {
   const value = new File([content], name);

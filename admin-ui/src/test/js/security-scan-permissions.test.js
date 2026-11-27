@@ -1,16 +1,10 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { resolve } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(resolve(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
-const browse = readFileSync(resolve(__dirname, '../../../../browse-ui/src/main/resources/META-INF/resources/browse/assets/browse.js'), 'utf8');
-function extract(name, text = source) {
-  const start = text.indexOf(`function ${name}(`);
-  assert.ok(start >= 0);
-  return text.slice(text.slice(start - 6, start) === 'async ' ? start - 6 : start,
-    text.indexOf('\n}\n', start) + 3);
-}
+const source = declarations;
+const browse = require("../../../../scripts/ui/test-fixture.cjs")("browse");
+const extract = (name, text = source) => text(name);
 function setup(permissions = ['nexus:security-scanning:read']) {
   const elements = new Map();
   const writes = [];
@@ -24,7 +18,7 @@ function setup(permissions = ['nexus:security-scanning:read']) {
     });
     return elements.get(id);
   }
-  const context = vm.createContext({
+  const context = declarations.context({
     securityScanState: { summary: { deploymentEnabled: true },
       tasks: [{ id: 1, assetId: 1, status: 'FAILED', canManage: false, canRescan: false }],
       repositories: [{ id: 1, canConfigure: false, config: {} }],
@@ -110,7 +104,7 @@ for (const [permissions, expected] of [
 ]) {
   test(`Browse Admin entry agrees with Admin routing for ${permissions}`, () => {
     const { context } = setup(permissions);
-    const browseContext = vm.createContext({ currentPermissions: permissions });
+    const browseContext = declarations.context({ currentPermissions: permissions });
     for (const name of ['permissionPartMatches', 'permissionMatches', 'can', 'adminEntryUrl'])
       vm.runInContext(extract(name, browse), browseContext);
     assert.equal(Boolean(browseContext.adminEntryUrl()), expected);
@@ -127,7 +121,7 @@ for (const [permissions, expected] of [
 
 for (const text of [source, browse]) {
   test(`action aliases match backend semantics in ${text === source ? 'Admin' : 'Browse'}`, () => {
-    const context = vm.createContext({});
+    const context = declarations.context({});
     for (const name of ['permissionPartMatches', 'permissionMatches'])
       vm.runInContext(extract(name, text), context);
     for (const [granted, requested, allowed] of [

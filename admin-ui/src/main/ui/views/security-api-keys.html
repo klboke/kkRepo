@@ -1,0 +1,67 @@
+        <section class="view" id="security-api-keys-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
+            <h1>Keys &amp; Tokens</h1>
+            <span class="heading-copy">Manage API key ownership and domains</span>
+          </div>
+          <nav class="credentials-tabs" aria-label="Keys and tokens sections">
+            <a class="credentials-tab is-active" href="#admin/security/api-keys" aria-current="page">API Tokens</a>
+            <a class="credentials-tab" href="#admin/security/ohpm-login">OHPM Public Keys</a>
+          </nav>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
+          </div>
+          <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" aria-describedby="security-api-key-permission-help" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <button class="form-modal-close" data-modal-dismiss="security-api-key-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+          <form class="blobstore-form modal-form credentials-form" id="security-api-key-form" hidden novalidate>
+            <div class="form-title" id="security-api-key-form-title">Create API key</div>
+            <p class="form-note credentials-form-note" id="security-api-key-permission-help">API key permissions are determined by the owner's roles. To limit access, assign the owner only the required roles.</p>
+            <div class="form-grid">
+              <label>
+                <span>Domain</span>
+                <select id="security-api-key-domain">
+                  <option value="NpmToken">NpmToken</option>
+                  <option value="NuGetApiKey">NuGetApiKey</option>
+                  <option value="CargoToken">CargoToken</option>
+                  <option value="PubToken">PubToken</option>
+                  <option value="RubyGemsApiKey">RubyGemsApiKey</option>
+                  <option value="GenericToken">GenericToken</option>
+                </select>
+              </label>
+              <label><span>Display name</span><input id="security-api-key-display-name" type="text"></label>
+              <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" required aria-label="Owner source"></label>
+              <label><span>Owner user ID <span class="required-mark">*</span></span><input id="security-api-key-owner-user-id" type="text" required aria-label="Owner user ID"></label>
+            </div>
+            <p class="form-note" id="security-api-key-owner-status" role="status" aria-live="polite"></p>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-api-key-button" type="button">Create API key</button>
+              <button class="create-button secondary" id="cancel-security-api-key-button" type="button">Cancel</button>
+            </div>
+          </form>
+            </div>
+          </div>
+          <div class="form-modal" id="security-api-key-result-modal" data-form-id="security-api-key-result" role="dialog" aria-modal="true" aria-labelledby="security-api-key-result-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-result"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <div class="blobstore-form modal-form" id="security-api-key-result" hidden>
+                <label class="form-title" id="security-api-key-result-title" for="security-api-key-value">Generated token</label>
+                <div class="form-grid">
+                  <input class="full-width" id="security-api-key-value" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="security-api-key-result-note">
+                </div>
+                <p class="form-note" id="security-api-key-result-note">Shown once after generate or reset.</p>
+                <div class="form-actions">
+                  <button class="create-button" id="copy-security-api-key" type="button">Copy</button>
+                  <button class="create-button secondary" data-modal-dismiss="security-api-key-result" type="button">Close</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Domain</th><th>Owner</th><th>Status</th><th>Prefix</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-api-key-table"></tbody>
+            </table>
+          </div>
+        </section>
