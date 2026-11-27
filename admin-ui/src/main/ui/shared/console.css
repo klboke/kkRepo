@@ -57,30 +57,9 @@
   position: absolute;
   inset-inline: var(--tab-inset,12px);
   bottom: 4px;
-  height: 2px;
-  color: var(--topbar-active);
-  border-bottom: 2px solid currentColor;
+  border-bottom: 2px solid var(--topbar-active);
   border-radius: 1px;
   transform-origin: left center;
-}
-.workspace-marker.is-moving {
-  --workspace-line-flat: polygon(
-    0 0, 36% 0, 42% 0, 49% 0, 51% 0, 58% 0, 64% 0, 100% 0,
-    100% 2px, 63% 2px, 56% 2px, 50% 2px, 44% 2px, 37% 2px, 0 2px
-  );
-  --workspace-line-peak: polygon(
-    0 0, 36% 0, 42% -.5px, 49% -5.5px, 51% -5.5px, 58% -.5px, 64% 0, 100% 0,
-    100% 2px, 63% 2px, 56% 1.25px, 50% -2.75px, 44% 1.25px, 37% 2px, 0 2px
-  );
-  clip-path: var(--workspace-line-flat);
-  border: 0;
-}
-.workspace-marker.is-moving::before {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  border-bottom: 8px solid currentColor;
 }
 [data-workspace-origin] .workspace-tab[aria-current] { position: static; }
 [data-workspace-origin] .workspace-marker {
