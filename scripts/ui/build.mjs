@@ -44,7 +44,8 @@ const bundle = await rollup({
 });
 const { output: [entry] } = await bundle.generate({ format: "es" });
 await bundle.close();
-const css = read(join(ui, "styles.css")).replace(/@import "([^"]+)";\n/g, (_, file) => read(join(ui, file)));
+const css = read(join(ui, "styles.css")).replace(/@import "([^"]+)";\n/g, (_, file) =>
+  read(file.startsWith("#ui-shared/") ? join(root, "admin-ui/src/main/ui/shared", file.slice("#ui-shared/".length)) : join(ui, file)));
 mkdirSync(join(out, "assets"), { recursive: true });
 for (const [ext, content] of [["css", css], ["js", entry.code]]) writeFileSync(join(out, "assets", app + "." + ext), content);
 function publicFile(url) {

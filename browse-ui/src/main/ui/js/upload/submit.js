@@ -11,6 +11,8 @@ function setUploadStatus(message, tone = "") {
 
 async function uploadSelectedAsset(event) {
   event.preventDefault();
+  const submit = document.getElementById("upload-submit");
+  if (submit.disabled) return;
   const repo = selectedUploadRepository();
   if (!repo) {
     setUploadStatus("Repository is required.", "error");
@@ -23,8 +25,8 @@ async function uploadSelectedAsset(event) {
     setUploadStatus(error.message, "error");
     return;
   }
-  const submit = document.getElementById("upload-submit");
   submit.disabled = true;
+  submit.setAttribute("aria-busy", "true");
   setUploadStatus("Uploading...");
   try {
     const response = await fetch(`/service/rest/v1/components?repository=${encodeURIComponent(repo.name)}`, {
@@ -40,6 +42,7 @@ async function uploadSelectedAsset(event) {
   } catch (error) {
     setUploadStatus(`Upload failed: ${error.message}`, "error");
   } finally {
+    submit.removeAttribute("aria-busy");
     submit.disabled = false;
   }
 }

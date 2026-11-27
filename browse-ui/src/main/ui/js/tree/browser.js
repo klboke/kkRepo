@@ -111,6 +111,7 @@ function renderTree() {
       </aside>
     </div>
   `;
+  drill.querySelector("#tree-root").addEventListener("keydown", navigateTree);
   initSplitResizer(drill.querySelector(".browse-split"));
   drill.querySelector(".crumb[data-crumb-root]").addEventListener("click", () => showRepositoryList());
   drill.querySelector("#advanced-search-link").addEventListener("click", (e) => {
@@ -193,7 +194,8 @@ function buildTreeNode(entry) {
   icon.innerHTML = entry.leaf ? iconForFile(entry.name) : iconForDir(entry.name);
   row.appendChild(icon);
 
-  const label = document.createElement("span");
+  const label = document.createElement("button");
+  label.type = "button";
   label.className = "tree-label";
   label.textContent = entry.name;
   row.appendChild(label);
@@ -245,16 +247,47 @@ function buildTreeNode(entry) {
   return li;
 }
 
+function navigateTree(event) {
+  const label = event.target.closest(".tree-label");
+  if (!label) return;
+  const row = label.closest(".tree-row");
+  const node = row.parentElement;
+  const toggle = row.querySelector(".tree-toggle");
+  const labels = Array.from(event.currentTarget.querySelectorAll(".tree-label"))
+    .filter(item => item.getClientRects().length);
+  const index = labels.indexOf(label);
+  switch (event.key) {
+    case "ArrowDown": labels[Math.min(labels.length - 1, index + 1)]?.focus(); break;
+    case "ArrowUp": labels[Math.max(0, index - 1)]?.focus(); break;
+    case "Home": labels[0]?.focus(); break;
+    case "End": labels.at(-1)?.focus(); break;
+    case "ArrowRight":
+      if (toggle.disabled) return;
+      if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
+      else node.querySelector(":scope > .tree-children .tree-label")?.focus();
+      break;
+    case "ArrowLeft":
+      if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
+      else node.parentElement.closest(".tree-node")?.querySelector(":scope > .tree-row .tree-label")?.focus();
+      break;
+    default: return;
+  }
+  event.preventDefault();
+}
+
 function setTreeToggleIcon(toggle, open) {
   const label = open ? "Collapse folder" : "Expand folder";
   toggle.innerHTML = lucideIcon(open ? "minus" : "plus");
   toggle.title = label;
+  toggle.setAttribute("aria-expanded", String(open));
   toggle.setAttribute("aria-label", label);
 }
 
 function selectRow(row) {
   document.querySelectorAll(".tree-row.is-selected").forEach((el) => el.classList.remove("is-selected"));
+  document.querySelector(".tree-label[aria-current]")?.removeAttribute("aria-current");
   row.classList.add("is-selected");
+  row.querySelector(".tree-label")?.setAttribute("aria-current", "true");
 }
 
 function syncTreePath(entry) {

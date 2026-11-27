@@ -1,3 +1,5 @@
+import { bindNavigationDisclosure } from "#ui-shared/navigation.js";
+import { bindFormControls } from "#ui-shared/form-controls.js";
 import { bindShellEvents } from "./shell/navigation-events.js";
 import { bindSearchEvents } from "./search/events.js";
 import { bindRepositoriesEvents } from "./repositories/events.js";
@@ -6,6 +8,8 @@ import { bindAccountEvents } from "./account/events.js";
 import { initializeLoginReturnTo } from "./shell/session.js";
 import { bootstrap } from "./shell/start.js";
 
+bindNavigationDisclosure();
+bindFormControls();
 bindShellEvents();
 bindSearchEvents();
 bindRepositoriesEvents();

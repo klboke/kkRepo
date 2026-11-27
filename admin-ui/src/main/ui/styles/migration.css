@@ -34,51 +34,6 @@ code {
   color: #1c3934;
 }
 
-.nx-table-frame {
-  margin: 0 24px 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--panel);
-  box-shadow: var(--shadow-soft);
-}
-
-.nx-table {
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-.nx-table th,
-.nx-table td {
-  height: 44px;
-  border-right: 0;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  font-size: 14px;
-}
-
-.nx-table th {
-  height: 42px;
-  background: var(--header);
-  color: var(--table-head-ink);
-  font-size: 12px;
-  font-weight: var(--fw-bold);
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.nx-table tbody tr:nth-child(odd),
-.nx-table tbody tr:nth-child(even) {
-  background: var(--row);
-}
-
-.nx-table tbody tr:hover {
-  background: var(--row-hover);
-}
-
-.nx-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
 .repo-sort-button:hover,
 .repo-sort-button.is-active {
   color: var(--active);
@@ -94,30 +49,6 @@ code {
 
 .repo-icon.proxy {
   color: #596d8f;
-}
-
-.state-badge {
-  border-radius: 8px;
-}
-
-.state-badge.ok {
-  background: #e1f1eb;
-  color: var(--success);
-}
-
-.state-badge.warn {
-  background: var(--warning-bg);
-  color: #805b16;
-}
-
-.state-badge.checking {
-  background: var(--info-bg);
-  color: #40577d;
-}
-
-.state-badge.bad {
-  background: var(--danger-bg);
-  color: var(--danger);
 }
 
 .health-score {

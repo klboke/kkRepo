@@ -6,3 +6,5 @@
 @import "./styles/security.css";
 @import "./styles/cleanup.css";
 @import "./styles/system.css";
+@import "#ui-shared/console.css";
+@import "./styles/workspace.css";

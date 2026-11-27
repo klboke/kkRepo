@@ -28,19 +28,19 @@
                       <span class="member-pane-title">Available <span class="member-count" id="role-privilege-available-count">0</span></span>
                     </div>
                     <input type="search" class="member-filter" id="role-privilege-filter" placeholder="Filter privileges..." autocomplete="off">
-                    <ul class="member-list" id="role-privilege-available-list" tabindex="0" aria-label="Available privileges"></ul>
+                    <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-privilege-available-list" tabindex="0" aria-label="Available privileges"></ul>
                   </div>
                   <div class="member-actions" role="group" aria-label="Move privileges">
-                    <button type="button" class="member-action" id="role-privilege-add-all" title="Add all">&raquo;</button>
-                    <button type="button" class="member-action" id="role-privilege-add" title="Add selected">&rsaquo;</button>
-                    <button type="button" class="member-action" id="role-privilege-remove" title="Remove selected">&lsaquo;</button>
-                    <button type="button" class="member-action" id="role-privilege-remove-all" title="Remove all">&laquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-add-all" title="Add all" aria-label="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-add" title="Add selected" aria-label="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-remove" title="Remove selected" aria-label="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="role-privilege-remove-all" title="Remove all" aria-label="Remove all">&laquo;</button>
                   </div>
                   <div class="member-pane" data-side="selected">
                     <div class="member-pane-head">
                       <span class="member-pane-title">Given <span class="member-count" id="role-privilege-selected-count">0</span></span>
                     </div>
-                    <ul class="member-list" id="role-privilege-selected-list" tabindex="0" aria-label="Given privileges"></ul>
+                    <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-privilege-selected-list" tabindex="0" aria-label="Given privileges"></ul>
                   </div>
                 </div>
               </div>
@@ -52,19 +52,19 @@
                       <span class="member-pane-title">Available <span class="member-count" id="role-contained-available-count">0</span></span>
                     </div>
                     <input type="search" class="member-filter" id="role-contained-filter" placeholder="Filter roles..." autocomplete="off">
-                    <ul class="member-list" id="role-contained-available-list" tabindex="0" aria-label="Available roles"></ul>
+                    <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-contained-available-list" tabindex="0" aria-label="Available roles"></ul>
                   </div>
                   <div class="member-actions" role="group" aria-label="Move roles">
-                    <button type="button" class="member-action" id="role-contained-add-all" title="Add all">&raquo;</button>
-                    <button type="button" class="member-action" id="role-contained-add" title="Add selected">&rsaquo;</button>
-                    <button type="button" class="member-action" id="role-contained-remove" title="Remove selected">&lsaquo;</button>
-                    <button type="button" class="member-action" id="role-contained-remove-all" title="Remove all">&laquo;</button>
+                    <button type="button" class="member-action" id="role-contained-add-all" title="Add all" aria-label="Add all">&raquo;</button>
+                    <button type="button" class="member-action" id="role-contained-add" title="Add selected" aria-label="Add selected">&rsaquo;</button>
+                    <button type="button" class="member-action" id="role-contained-remove" title="Remove selected" aria-label="Remove selected">&lsaquo;</button>
+                    <button type="button" class="member-action" id="role-contained-remove-all" title="Remove all" aria-label="Remove all">&laquo;</button>
                   </div>
                   <div class="member-pane" data-side="selected">
                     <div class="member-pane-head">
                       <span class="member-pane-title">Contained <span class="member-count" id="role-contained-selected-count">0</span></span>
                     </div>
-                    <ul class="member-list" id="role-contained-selected-list" tabindex="0" aria-label="Contained roles"></ul>
+                    <ul role="listbox" aria-multiselectable="true" class="member-list" id="role-contained-selected-list" tabindex="0" aria-label="Contained roles"></ul>
                   </div>
                 </div>
               </div>

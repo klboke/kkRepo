@@ -1,3 +1,5 @@
+import { bindNavigationDisclosure } from "#ui-shared/navigation.js";
+import { bindFormControls } from "#ui-shared/form-controls.js";
 import "./shell/legacy-route.js";
 import { bindShellEvents } from "./shell/navigation-events.js";
 import { bindRepositoriesEvents } from "./repositories/events.js";
@@ -10,6 +12,8 @@ import { bindAuditEvents } from "./audit/events.js";
 import { bindMigrationEvents } from "./migration/events.js";
 import { bootstrap } from "./shell/start.js";
 
+bindNavigationDisclosure();
+bindFormControls();
 bindShellEvents();
 bindRepositoriesEvents();
 bindStorageEvents();

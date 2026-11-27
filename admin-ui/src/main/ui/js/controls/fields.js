@@ -111,6 +111,20 @@ function clearRequiredFieldError(event) {
 function bindRequiredFieldErrors(fields) {
   fields.forEach((field) => {
     const input = document.getElementById(field.id);
+    if (input && !input.dataset.requiredErrorBound) {
+      const field = input.closest("label, .form-field");
+      if (field) {
+        const error = document.createElement("small");
+        error.id = input.id + "-required-error";
+        error.className = "field-error";
+        error.textContent = "Required";
+        field.append(error);
+        const target = input.id === "repository-recipe"
+          ? document.getElementById("repository-recipe-trigger") : input;
+        target.setAttribute("aria-errormessage", error.id);
+        input.dataset.requiredErrorBound = "true";
+      }
+    }
     input?.addEventListener("input", clearRequiredFieldError);
     input?.addEventListener("change", clearRequiredFieldError);
   });

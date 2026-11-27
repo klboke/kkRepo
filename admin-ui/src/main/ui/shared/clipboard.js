@@ -15,7 +15,8 @@ export async function copyLocationText(value) {
   textarea.readOnly = true;
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
+  const container = previousFocus?.closest?.("dialog[open]") || document.body;
+  container.appendChild(textarea);
   try {
     textarea.select();
     if (!document.execCommand("copy")) throw new Error("Copy unavailable");

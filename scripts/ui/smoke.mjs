@@ -69,6 +69,25 @@ try {
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
   const edit = page.locator('.edit-repository-button[data-name="' + repo + '"]');
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const table = page.locator("#repositories-view .fixed-table-frame");
+  await expect(edit).toBeVisible();
+  assert.ok(await table.evaluate(frame => frame.scrollWidth <= frame.clientWidth + 1), "Compact rows fit the viewport");
+  await page.locator("#repository-all-columns").check();
+  await expect(page.locator("#repositories-view th").getByText("Blob store", { exact: true })).toBeVisible();
+  await page.locator("#repository-all-columns").uncheck();
+  await page.locator("#create-repository-button").click();
+  await page.locator("#repository-recipe-trigger").click();
+  await page.locator("#repository-recipe-search").press("End");
+  const active = page.locator("#repository-recipe-options .is-active");
+  assert.ok(await active.evaluate(option => {
+    const rect = option.getBoundingClientRect();
+    return option.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  }), "Last recipe is reachable outside the modal scroll clipping");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#repository-recipe-trigger")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#create-repository-button")).toBeFocused();
   await edit.click();
   const age = page.locator("#repository-content-max-age");
   await expect(age).toHaveValue("60");

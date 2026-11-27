@@ -1,46 +1,39 @@
 import { copyLocationText as copyTextToClipboard } from "#ui-shared/clipboard.js";
 import { lucideIcon } from "./icons.js";
 
-async function copyRepositoryUrl(button) {
-  const url = button.dataset.repositoryUrl;
-  if (!url) return;
-  if (button.copyResetTimer) clearTimeout(button.copyResetTimer);
+const pendingCopies = new WeakMap();
+
+async function copyWithFeedback(button, value, label, success, failure, status) {
+  const attempt = {};
+  pendingCopies.set(button, attempt);
+  let copied = true;
   try {
-    await copyTextToClipboard(url);
-    button.classList.add("copied");
-    button.classList.remove("copy-failed");
-    button.innerHTML = lucideIcon("check");
-    button.title = "Copied";
-    button.setAttribute("aria-label", "Repository URL copied");
-    announceRepositoryCopyStatus("Repository URL copied");
-    button.copyResetTimer = setTimeout(() => resetRepositoryCopyButton(button), 1200);
+    await copyTextToClipboard(value);
   } catch {
-    button.classList.add("copy-failed");
-    button.classList.remove("copied");
-    button.innerHTML = lucideIcon("x");
-    button.title = "Copy failed";
-    button.setAttribute("aria-label", "Unable to copy repository URL");
-    announceRepositoryCopyStatus("Unable to copy repository URL");
-    button.copyResetTimer = setTimeout(() => resetRepositoryCopyButton(button), 1400);
+    copied = false;
   }
+  if (pendingCopies.get(button) !== attempt || !button.isConnected) return;
+  const message = copied ? success : failure;
+  button.classList.toggle("copied", copied);
+  button.classList.toggle("copy-failed", !copied);
+  button.innerHTML = lucideIcon(copied ? "check" : "x");
+  button.title = message;
+  button.setAttribute("aria-label", message);
+  status.textContent = message;
+  setTimeout(() => {
+    if (pendingCopies.get(button) !== attempt) return;
+    button.classList.remove("copied", "copy-failed");
+    button.innerHTML = lucideIcon("copy");
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    pendingCopies.delete(button);
+  }, copied ? 1500 : 3500);
 }
 
-function resetRepositoryCopyButton(button) {
-  button.copyResetTimer = null;
-  button.classList.remove("copied", "copy-failed");
-  button.innerHTML = lucideIcon("copy");
-  button.title = "Copy repository URL";
-  button.setAttribute("aria-label", "Copy repository URL");
+function copyRepositoryUrl(button) {
+  return copyWithFeedback(button, button.dataset.repositoryUrl, "Copy repository URL",
+    "Repository URL copied", "Unable to copy repository URL",
+    document.getElementById("repository-copy-status"));
 }
 
-function announceRepositoryCopyStatus(message) {
-  const status = document.getElementById("repository-copy-status");
-  if (!status) return;
-  status.textContent = "";
-  requestAnimationFrame(() => { status.textContent = message; });
-}
-
-export {
-  copyRepositoryUrl,
-  copyTextToClipboard,
-};
+export { copyRepositoryUrl, copyTextToClipboard, copyWithFeedback };

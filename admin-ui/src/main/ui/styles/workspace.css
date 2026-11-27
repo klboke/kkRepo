@@ -1,0 +1,83 @@
+.side-nav .side-group { height: 30px; color: var(--ink-3); letter-spacing: .05em; font-size: 10px; }
+.side-nav .side-group.is-current.is-open { color: var(--brand-strong); background: transparent; }
+.side-nav .side-item { height: 34px; }
+.view > .nx-table-frame { margin: 0 var(--console-gutter) 24px; }
+.action-bar, .table-tools { align-items: center; flex-wrap: wrap; gap: 8px; }
+.action-bar .filter-box { flex: 1 1 180px; }
+.column-choice { display: none; }
+.repository-name { font-weight: var(--fw-semibold); overflow-wrap: anywhere; }
+#repositories-view .actions-column { white-space: nowrap; }
+.repository-more { min-width: 28px; font-weight: bold; letter-spacing: .04em; }
+.row-menu, .recipe-combobox-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink-2);
+  box-shadow: var(--shadow-pop);
+  overflow: auto;
+  z-index: 120;
+}
+.recipe-combobox-popover { width: max-content; min-width: min(240px, calc(100vw - 20px)); padding: 8px; }
+.recipe-combobox-popover:not([hidden]) { display: flex; flex-direction: column; }
+.recipe-combobox-search { flex: none; }
+.recipe-combobox-options { min-height: 0; overscroll-behavior: contain; }
+.row-menu { width: 156px; padding: 4px; }
+.row-menu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px;
+  padding-inline: 10px; background: transparent; border: 0; border-radius: var(--r-xs);
+  color: var(--ink-2); cursor: pointer; font: inherit; text-align: start;
+}
+.row-menu button:hover, .row-menu button:focus-visible { background: var(--surface-muted); }
+.row-menu [data-action="delete"] { color: var(--danger); }
+.summary-grid {
+  gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--line);
+}
+.summary-grid > div { min-width: 0; border: 0; border-radius: 0; padding: 10px 14px; background: var(--surface-muted); }
+.summary-grid strong { color: var(--ink-1); font-variant-numeric: tabular-nums; }
+.security-scan-summary > div { padding: 8px 10px; }
+.pagination-bar { gap: 8px; align-items: center; color: var(--ink-3); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.pagination-bar button { min-height: 29px; border-radius: var(--r-sm); }
+:is(.security-scan-tabs,.cleanup-tabs) { gap: 3px; overflow-x: auto; }
+:is(.security-scan-tab,.cleanup-tab)[role="tab"] { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+:is(.security-scan-tab,.cleanup-tab)[aria-selected="true"] { background: var(--brand-tint); color: var(--brand-strong); box-shadow: inset 0 -2px var(--brand); }
+.form-modal .form-modal-panel { border-radius: var(--r-lg); background: var(--surface); }
+.form-modal .modal-form .form-title { padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-xl); }
+.modal-form .form-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+.form-grid .field-error { display: none; color: var(--danger); font-size: var(--fs-xs); }
+.form-grid :is(label,.form-field):has([aria-invalid="true"]) > .field-error { display: block; }
+.member-transfer { padding: 8px; border: 1px solid var(--line); background: var(--surface-muted); border-radius: var(--r-md); }
+.member-pane-head .member-count { color: var(--brand-strong); background: var(--brand-tint); font-variant-numeric: tabular-nums; }
+.member-list .member-row.is-selected { background: var(--brand-tint); color: var(--brand-strong); }
+.member-list:focus .is-current-option { outline: 2px solid var(--brand); outline-offset: -2px; }
+.member-order-actions { display: flex; justify-content: flex-end; gap: 4px; }
+#member-transfer .member-pane[data-side="selected"] { grid-template-rows: auto auto 1fr; }
+.toast { border-inline-start: 3px solid var(--brand); box-shadow: var(--shadow-pop); }
+.toast.error { border-inline-start-color: var(--danger); }
+.migration-progress-track, .repo-progress-track { overflow: hidden; border-radius: var(--r-pill); background: var(--surface-sunken); }
+.migration-progress-track > span, .repo-progress-track > i { background: var(--brand); }
+.migration-progress-track.is-unknown { background: repeating-linear-gradient(120deg,var(--surface-muted) 0 6px,var(--line) 6px 12px); }
+@media (max-width: 1480px) {
+  .column-choice { display: inline-flex; align-items: center; gap: 6px; padding-inline: 6px; font-size: var(--fs-sm); color: var(--ink-2); }
+  #repositories-view:not(:has(#repository-all-columns:checked)) [data-extra-column] { display: none; }
+  #repositories-view:not(:has(#repository-all-columns:checked)) .usage-table { width: 100%; min-width: 0; }
+  #repositories-view:not(:has(#repository-all-columns:checked)) .repository-name { white-space: normal; }
+}
+#security-scan-summary { grid-template-columns: repeat(auto-fit,minmax(106px,1fr)); }
+#security-scan-summary .security-scan-database-revision { white-space: normal; }
+@media (min-width: 1200px) and (max-width: 1480px) {
+  #repositories-view:not(:has(#repository-all-columns:checked)) :is(th,td)[data-extra-column].inventory-count,
+  #repositories-view:not(:has(#repository-all-columns:checked)) .repository-store-column { display: table-cell; }
+}
+@media (max-width: 760px) {
+  #repository-usage-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  #repositories-view .action-bar .select-filter { flex: 1 1 120px; }
+  #repositories-view .column-choice { min-height: 32px; }
+  #repositories-view .usage-table .icon-column { display: none; }
+  #repositories-view .usage-table :is(td,th) { padding-inline: 6px; }
+  #repositories-view .usage-overview, #repositories-view .fixed-table-frame { margin-inline: var(--console-gutter); }
+}
+.user-picker-options[popover] { position: fixed; inset: auto; margin: 0; width: min-content; }

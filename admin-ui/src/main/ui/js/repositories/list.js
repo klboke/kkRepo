@@ -20,6 +20,7 @@ const listState = {
 let repositoryUsage;
 
 let repositoryLoadVersion = 0;
+let repositoryListMessage = "Loading…";
 
 function repoIcon(type) {
   const lower = String(type || "").toLowerCase();
@@ -90,24 +91,24 @@ function renderRepositories() {
     return `
       <tr>
         <td class="icon-column">${repoIcon(repo.type)}</td>
-        <td>${escapeHtml(repo.name)}</td>
-        <td>${escapeHtml(repo.recipe)}</td>
-        <td>${escapeHtml(lowerOrEmpty(repo.type))}</td>
+        <td class="repository-name">${escapeHtml(repo.name)}</td>
+        <td data-extra-column>${escapeHtml(repo.recipe)}</td>
+        <td data-extra-column>${escapeHtml(lowerOrEmpty(repo.type))}</td>
         <td>${formatBadge(repo.format)}</td>
         <td><span class="state-badge compact ${tone}">${status}</span></td>
-        <td>${blobStore}</td>
-        <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "assetCount")}</td>
-        <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "totalBytes", true)}</td>
-        <td class="usage-location">${renderCopyableLocation(displayUrl, "Copy URL")}</td>
+        <td data-extra-column class="repository-store-column">${blobStore}</td>
+        <td class="inventory-count" data-extra-column>${renderRepositoryMetric(repositoryUsage, repo, "assetCount")}</td>
+        <td class="inventory-count" data-extra-column>${renderRepositoryMetric(repositoryUsage, repo, "totalBytes", true)}</td>
+        <td class="usage-location" data-extra-column>${renderCopyableLocation(displayUrl, "Copy URL")}</td>
         <td class="actions-column">
           <button class="row-action edit-repository-button" data-name="${escapeHtml(repo.name)}" type="button">edit</button>
-          <button class="row-action delete-repository-button" data-name="${escapeHtml(repo.name)}" type="button">delete</button>
+          <button class="row-action repository-more" data-name="${escapeHtml(repo.name)}" data-url="${escapeHtml(displayUrl)}" type="button" aria-label="More actions for ${escapeHtml(repo.name)}" aria-expanded="false" aria-controls="repository-actions"><span aria-hidden="true">···</span></button>
         </td>
       </tr>
     `;
   }).join("");
   document.getElementById("repository-table").innerHTML = rows
-    || '<tr><td colspan="11" class="placeholder">No matching repositories.</td></tr>';
+    || `<tr><td colspan="11" class="placeholder">${escapeHtml(repositoryListMessage || (listState.repositories.length ? "No matching repositories." : "No repositories available."))}</td></tr>`;
 }
 
 function repositoryDisplayUrl(repo) {
@@ -136,11 +137,18 @@ function refreshRepositoryStoreFilter() {
 
 async function loadRepositories() {
   const version = ++repositoryLoadVersion;
-  repositoryUsage = undefined;
+  const refresh = document.getElementById("repository-usage-refresh");
+  refresh.ariaBusy = "true";
+  if (!listState.repositories.length) {
+    repositoryListMessage = "Loading…";
+    renderRepositories();
+  }
   try {
     const payload = await listRepositories();
     if (version !== repositoryLoadVersion) return;
     listState.repositories = payload;
+    repositoryListMessage = "";
+    repositoryUsage = undefined;
     if (!listState.repositories.length) repositoryUsage = { usage: {}, calculatedAt: new Date().toISOString() };
     if (listState.repositories.length) {
       fetchInventoryUsage("/internal/repositories/statistics/usage").catch(() => null).then((snapshot) => {
@@ -151,10 +159,12 @@ async function loadRepositories() {
     }
   } catch (error) {
     if (version !== repositoryLoadVersion) return;
+    repositoryListMessage = "Failed to load repositories";
     listState.repositories = [];
     repositoryUsage = null;
     showToast(`Failed to load repositories: ${error.message}`, "error");
   }
+  refresh.ariaBusy = "false";
   refreshRepositoryStoreFilter();
   renderRepositories();
   refreshRepositoryMemberOptions();

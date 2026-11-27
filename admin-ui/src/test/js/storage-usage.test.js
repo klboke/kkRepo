@@ -215,8 +215,10 @@ for (const kind of ['repository', 'blobstore']) {
       return response(kind === 'repository' ? [{id:1,name:'repo',blobStoreName:'store'}] : {stores:[{id:1,name:'store'}]});
     });
     const load = () => kind === 'repository' ? c.loadRepositories() : c.loadBlobStores();
-    await load();
-    assert.equal(c[kind === 'repository' ? 'repoRenders' : 'blobRenders'], 1);
+    const loading = load();
+    if (kind === 'repository') assert.equal(c.repoRenders, 1, 'empty list shows loading immediately');
+    await loading;
+    assert.equal(c[kind === 'repository' ? 'repoRenders' : 'blobRenders'], kind === 'repository' ? 2 : 1);
     assert.equal(run(kind === 'repository' ? 'repositoryUsage' : 'blobStoreUsage'), undefined);
     await load();
     pending[1](response({usage:{1:{assetCount:20,blobCount:20}}}));

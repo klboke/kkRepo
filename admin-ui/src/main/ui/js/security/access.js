@@ -1,3 +1,4 @@
+import { bindTransferKeyboard } from "../controls/transfer.js";
 import { escapeHtml, lowerOrEmpty } from "../controls/display.js";
 import {
   clearRequiredFieldErrors,
@@ -230,7 +231,7 @@ function transferItemMatchesFilter(item, filter) {
 
 function securityTransferRowHtml(config, item, side) {
   const highlighted = config.state.highlight[side].has(item.id);
-  return `<li class="member-row${highlighted ? " is-selected" : ""}" data-id="${escapeHtml(item.id)}" data-side="${side}"><span class="member-name">${escapeHtml(item.label)}</span><span class="member-type">${escapeHtml(item.meta || "")}</span></li>`;
+  return `<li role="option" aria-selected="${highlighted}" class="member-row${highlighted ? " is-selected" : ""}" data-id="${escapeHtml(item.id)}" data-side="${side}"><span class="member-name">${escapeHtml(item.label)}</span><span class="member-type">${escapeHtml(item.meta || "")}</span></li>`;
 }
 
 function refreshSecurityTransfer(key) {
@@ -349,6 +350,12 @@ function bindSecurityTransfer(key) {
     else removeSecurityTransferItems(key, [row.dataset.id]);
   };
 
+  for (const [list, side] of [[availableList, "available"], [selectedList, "selected"]]) {
+    bindTransferKeyboard(list, row => {
+      toggleSecurityTransferHighlight(key, side, row.dataset.id, true);
+      refreshSecurityTransfer(key);
+    }, row => side === "available" ? addSecurityTransferItems(key, [row.dataset.id]) : removeSecurityTransferItems(key, [row.dataset.id]));
+  }
   availableList.addEventListener("click", listClickHandler("available"));
   availableList.addEventListener("dblclick", listDoubleClickHandler("available"));
   selectedList.addEventListener("click", listClickHandler("selected"));

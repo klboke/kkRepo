@@ -18,6 +18,7 @@
   <body>
     <div class="nx-shell">
       <header class="nx-topbar">
+        <button id="navigation-toggle" class="navigation-toggle" type="button" aria-label="Navigation" aria-expanded="false" aria-controls="workspace-navigation"><span aria-hidden="true"></span></button>
         <div class="product">
           <a class="logo-mark product-home-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer" aria-label="kkRepo GitHub repository">KL</a>
           <div class="product-copy">
@@ -77,7 +78,7 @@
       <div class="cleanup-policy-action-menu" id="cleanup-policy-action-menu" role="menu" aria-hidden="true" hidden></div>
       <div class="cleanup-policy-action-menu" id="blobstore-action-menu" role="menu" aria-hidden="true" hidden></div>
 
-      <aside class="nx-sidebar">
+      <aside class="nx-sidebar" id="workspace-navigation">
         <nav class="side-nav" aria-label="Administration navigation">
           <button class="side-group is-open" data-side-group="repository" type="button" aria-expanded="true" aria-controls="side-group-repository-items">
             <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
@@ -273,6 +274,7 @@
       </div>
       <div class="proxy-dialog-footer">
         <button class="create-button secondary" id="offload-copy-example" type="button">Copy example</button>
+        <span id="offload-example-copy-status" class="copy-feedback" role="status"></span>
         <form method="dialog"><button class="create-button" type="submit">Done</button></form>
       </div>
     </dialog>

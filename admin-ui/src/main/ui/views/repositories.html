@@ -12,6 +12,7 @@
             </label>
             <button class="create-button secondary" id="repository-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
             <label class="select-filter"><span>Blob store</span><select id="repository-store-filter" aria-label="Filter by blob store"><option value="">All blob stores</option></select></label>
+            <label class="column-choice"><input type="checkbox" id="repository-all-columns"><span>All columns</span></label>
           </div>
           <div class="usage-overview">
             <div class="summary-grid" id="repository-usage-summary" aria-live="polite">
@@ -46,7 +47,7 @@
                     <span class="recipe-combobox-value" id="repository-recipe-value">Select a recipe</span>
                     <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
                   </button>
-                  <div class="recipe-combobox-popover" id="repository-recipe-popover" hidden>
+                  <div class="recipe-combobox-popover" id="repository-recipe-popover" popover="manual" hidden>
                     <input
                         class="recipe-combobox-search"
                         id="repository-recipe-search"
@@ -530,7 +531,7 @@
                     <span class="member-pane-title">Available <span class="member-count" id="member-available-count">0</span></span>
                   </div>
                   <input type="search" class="member-filter" id="member-filter" placeholder="Filter by name…" autocomplete="off">
-                  <ul class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
+                  <ul role="listbox" aria-multiselectable="true" class="member-list" id="member-available-list" tabindex="0" aria-label="Available repositories"></ul>
                 </div>
                 <div class="member-actions" role="group" aria-label="Move members">
                   <button type="button" class="member-action" id="member-add-all" title="Add all" aria-label="Add all"><span class="lucide-icon icon-chevrons-right" aria-hidden="true"></span></button>
@@ -543,7 +544,8 @@
                     <span class="member-pane-title">Selected <span class="member-count" id="member-selected-count">0</span></span>
                     <span class="member-pane-hint">drag to reorder · priority top → bottom</span>
                   </div>
-                  <ul class="member-list ordered" id="member-selected-list" tabindex="0" aria-label="Selected repositories (priority order)"></ul>
+                  <div class="member-order-actions"><button type="button" class="member-action" id="member-up" title="Move up" aria-label="Move up">↑</button><button type="button" class="member-action" id="member-down" title="Move down" aria-label="Move down">↓</button></div>
+                  <ul role="listbox" aria-multiselectable="true" class="member-list ordered" id="member-selected-list" tabindex="0" aria-label="Selected repositories (priority order)"></ul>
                 </div>
               </div>
             </fieldset>
@@ -553,6 +555,10 @@
             </div>
           </form>
             </div>
+          </div>
+          <div id="repository-actions" class="row-menu" role="group" aria-label="Repository actions" popover="manual" hidden>
+            <button type="button" data-action="copy"><span class="lucide-icon icon-copy" aria-hidden="true"></span>Copy URL</button>
+            <button type="button" data-action="delete"><span class="lucide-icon icon-x" aria-hidden="true"></span>Delete</button>
           </div>
           <div class="nx-table-frame fixed-table-frame">
             <table class="nx-table usage-table">
@@ -565,13 +571,13 @@
                       <span>Name</span>
                     </button>
                   </th>
-                  <th aria-sort="none">
+                  <th data-extra-column aria-sort="none">
                     <button class="repo-sort-button" data-repository-sort="recipe" type="button">
                       <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Recipe</span>
                     </button>
                   </th>
-                  <th aria-sort="none">
+                  <th data-extra-column aria-sort="none">
                     <button class="repo-sort-button" data-repository-sort="type" type="button">
                       <span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span>
                       <span>Type</span>
@@ -584,10 +590,10 @@
                     </button>
                   </th>
                   <th>Status</th>
-                  <th>Blob store</th>
-                  <th class="inventory-count" aria-sort="none" title="Stored files, including metadata and this repository’s own cache."><button class="repo-sort-button" data-repository-sort="assetCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Asset Count</span></button></th>
-                  <th class="inventory-count" aria-sort="none" title="Sum of asset sizes; shared content is counted per asset. This is not physical storage usage."><button class="repo-sort-button" data-repository-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Logical size</span></button></th>
-                  <th>URL</th>
+                  <th data-extra-column class="repository-store-column">Blob store</th>
+                  <th data-extra-column class="inventory-count" aria-sort="none" title="Stored files, including metadata and this repository’s own cache."><button class="repo-sort-button" data-repository-sort="assetCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Asset Count</span></button></th>
+                  <th data-extra-column class="inventory-count" aria-sort="none" title="Sum of asset sizes; shared content is counted per asset. This is not physical storage usage."><button class="repo-sort-button" data-repository-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Logical size</span></button></th>
+                  <th data-extra-column>URL</th>
                   <th class="actions-column">Actions</th>
                 </tr>
               </thead>

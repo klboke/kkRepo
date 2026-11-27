@@ -1,3 +1,4 @@
+import { bindTransferKeyboard } from "../controls/transfer.js";
 import { escapeHtml, lowerOrEmpty, lucideIcon } from "../controls/display.js";
 import { editingRepositoryName, repositoryFormMode } from "./form.js";
 import { listState } from "./list.js";
@@ -66,6 +67,10 @@ function renderMemberTransfer(candidates) {
   document.getElementById("member-available-count").textContent = String(available.length);
   document.getElementById("member-selected-count").textContent = String(memberTransfer.selected.length);
 
+  const single = memberTransfer.highlight.selected.size === 1;
+  const index = memberTransfer.selected.indexOf([...memberTransfer.highlight.selected][0]);
+  document.getElementById("member-up").disabled = !single || index <= 0;
+  document.getElementById("member-down").disabled = !single || index < 0 || index >= memberTransfer.selected.length - 1;
   document.getElementById("member-add").disabled = memberTransfer.highlight.available.size === 0;
   document.getElementById("member-add-all").disabled = available.length === 0;
   document.getElementById("member-remove").disabled = memberTransfer.highlight.selected.size === 0;
@@ -78,7 +83,7 @@ function memberRowHtml(repo, side, order) {
   const draggable = side === "selected";
   const handle = draggable ? lucideIcon("grip-vertical", "member-handle") : "";
   const orderBadge = order != null ? `<span class="member-order">${order}</span>` : "";
-  return `<li class="member-row${isSelected ? " is-selected" : ""}" data-name="${escapeHtml(repo.name)}" data-side="${side}"${draggable ? ' draggable="true"' : ""}>${handle}${orderBadge}<span class="member-name">${escapeHtml(repo.name)}</span><span class="member-type">${escapeHtml(lowerOrEmpty(repo.type))}</span></li>`;
+  return `<li role="option" aria-selected="${isSelected}" class="member-row${isSelected ? " is-selected" : ""}" data-name="${escapeHtml(repo.name)}" data-side="${side}"${draggable ? ' draggable="true"' : ""}>${handle}${orderBadge}<span class="member-name">${escapeHtml(repo.name)}</span><span class="member-type">${escapeHtml(lowerOrEmpty(repo.type))}</span></li>`;
 }
 
 function toggleMemberHighlight(side, name, additive) {
@@ -146,6 +151,19 @@ function bindMemberTransferEvents() {
 
   const availableList = document.getElementById("member-available-list");
   const selectedList = document.getElementById("member-selected-list");
+  for (const [list, side] of [[availableList, "available"], [selectedList, "selected"]]) {
+    bindTransferKeyboard(list, row => {
+      toggleMemberHighlight(side, row.dataset.name, true);
+      refreshRepositoryMemberOptions();
+    }, row => side === "available" ? addSelectedMembers([row.dataset.name]) : removeSelectedMembers([row.dataset.name]));
+  }
+  for (const [button, step] of [["member-up", -1], ["member-down", 1]]) {
+    document.getElementById(button).addEventListener("click", () => {
+      const [name] = memberTransfer.highlight.selected;
+      const target = memberTransfer.selected[memberTransfer.selected.indexOf(name) + step];
+      if (target) reorderSelected(name, target, step < 0 ? "above" : "below");
+    });
+  }
   availableList.addEventListener("click", onListClick("available"));
   availableList.addEventListener("dblclick", onListDouble("available"));
   selectedList.addEventListener("click", onListClick("selected"));
