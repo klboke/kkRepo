@@ -19,6 +19,14 @@ public interface DatabaseDialect {
     return tableName;
   }
 
+  /**
+   * Wraps a text expression so that comparisons with it are case-sensitive, matching Java
+   * {@code String.equals}, on backends whose column collation ignores case.
+   */
+  default String caseSensitiveText(String expression) {
+    return expression;
+  }
+
   /** Optional keyword that prevents a bounded CTE from being merged into an outer fetch. */
   default String materializedCteModifier() {
     return "";

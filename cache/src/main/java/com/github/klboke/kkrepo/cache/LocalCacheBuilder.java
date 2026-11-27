@@ -14,6 +14,13 @@ public interface LocalCacheBuilder<K, V> {
 
   LocalCacheBuilder<K, V> expireAfterWrite(Duration duration);
 
+  /**
+   * Evicts expired entries on a background timer instead of waiting for the next cache access, so the
+   * removal listener runs promptly even on an idle cache. Opt-in: only for caches whose entries hold a
+   * resource that must be released when it expires.
+   */
+  LocalCacheBuilder<K, V> scheduledExpiration();
+
   LocalCacheBuilder<K, V> removalListener(LocalCacheRemovalListener<K, V> listener);
 
   LocalCache<K, V> build();

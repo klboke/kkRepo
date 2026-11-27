@@ -20,8 +20,8 @@ public class S3BlobStorageFactory {
   public BlobStorage forStore(S3BlobStoreConfig config) {
     // Exhaustive over Engine: adding an engine forces a compile error here until it's handled.
     return switch (config.engineType()) {
-      case OSS_NATIVE -> new OssNativeBlobStorage(ossClientFactory.client(config), config);
-      case AWS_S3 -> new S3BlobStorage(clientFactory.client(config), config);
+      case OSS_NATIVE -> new OssNativeBlobStorage(ossClientFactory.handle(config), config);
+      case AWS_S3 -> new S3BlobStorage(clientFactory.handle(config), config);
     };
   }
 

@@ -1,12 +1,13 @@
 package com.github.klboke.kkrepo.storage.s3;
 
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Set;
+import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -16,12 +17,25 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 
+/**
+ * Builds and caches the AWS SDK S3 clients (one connection pool each), node-local and rebuildable.
+ * The lifetime rules (clients keyed by store ID and signature, deferred close, leases for response
+ * streams, handles that resolve the live client) live in {@link ClientCache}.
+ */
 @Component
 public class S3ClientFactory {
+  private static final Logger log = LoggerFactory.getLogger(S3ClientFactory.class);
+
+  /** How long a client removed from the cache stays open for operations that already started. */
+  static final Duration CLOSE_GRACE = Duration.ofMinutes(5);
+  /**
+   * A client nobody asked for in this long is retired; every storage operation counts as a use. Streams
+   * that are still being read hold a lease, so this never cuts one off.
+   */
+  static final Duration IDLE_EXPIRY = Duration.ofHours(6);
+
   private final OutboundTlsTrust tlsTrust;
-  private final LocalCache<Long, CachedClient> cache = LocalCacheFactory.standard()
-      .<Long, CachedClient>builder("s3-clients")
-      .build();
+  private final ClientCache<S3Client> clients;
 
   public S3ClientFactory() {
     this(OutboundTlsTrust.defaults());
@@ -29,41 +43,44 @@ public class S3ClientFactory {
 
   @Autowired
   public S3ClientFactory(OutboundTlsTrust tlsTrust) {
+    this(tlsTrust, null, CLOSE_GRACE);
+  }
+
+  /** Test seam: a custom client builder and close grace (zero closes unleased clients synchronously). */
+  S3ClientFactory(
+      OutboundTlsTrust tlsTrust, Function<S3BlobStoreConfig, S3Client> clientBuilder, Duration closeGrace) {
     this.tlsTrust = tlsTrust;
+    this.clients = new ClientCache<>(
+        "s3-clients", "S3", log,
+        clientBuilder == null ? this::build : clientBuilder,
+        S3ClientFactory::closeQuietly, IDLE_EXPIRY, closeGrace);
   }
 
+  /** The client for this exact configuration, built on first use. */
   public S3Client client(S3BlobStoreConfig config) {
-    String signature = config.signature();
-    CachedClient cached = cache.getIfPresent(config.id());
-    if (cached != null && cached.signature.equals(signature)) {
-      return cached.client;
-    }
-    return cache.asMap().compute(config.id(), (id, current) -> {
-      if (current != null && current.signature.equals(signature)) {
-        return current;
-      }
-      if (current != null) {
-        closeQuietly(current.client);
-      }
-      return new CachedClient(signature, build(config));
-    }).client;
+    return clients.client(config);
   }
 
+  /**
+   * A reference that always resolves the live client for this configuration. Hold this, not the
+   * client itself, in anything that outlives a single request.
+   */
+  public ClientHandle<S3Client> handle(S3BlobStoreConfig config) {
+    return clients.handle(config);
+  }
+
+  /** Drops every client of this store (deleted or reconfigured); the next use builds a fresh one. */
   public void invalidate(long id) {
-    CachedClient removed = cache.asMap().remove(id);
-    if (removed != null) {
-      closeQuietly(removed.client);
-    }
+    clients.invalidate(id);
   }
 
   Set<Long> cachedStoreIds() {
-    return Set.copyOf(cache.asMap().keySet());
+    return clients.cachedStoreIds();
   }
 
   @PreDestroy
   void shutdown() {
-    cache.asMap().values().forEach(c -> closeQuietly(c.client));
-    cache.invalidateAll();
+    clients.shutdown();
   }
 
   private S3Client build(S3BlobStoreConfig config) {
@@ -103,8 +120,5 @@ public class S3ClientFactory {
       client.close();
     } catch (RuntimeException ignored) {
     }
-  }
-
-  private record CachedClient(String signature, S3Client client) {
   }
 }

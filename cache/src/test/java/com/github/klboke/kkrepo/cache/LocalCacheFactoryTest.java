@@ -34,6 +34,26 @@ class LocalCacheFactoryTest {
   }
 
   @Test
+  void scheduledExpirationEvictsAnIdleEntryWithoutAnyFurtherCacheAccess() throws InterruptedException {
+    CountDownLatch removed = new CountDownLatch(1);
+    AtomicReference<LocalCacheRemovalCause> cause = new AtomicReference<>();
+    LocalCache<String, String> cache = LocalCacheFactory.standard()
+        .<String, String>builder("test-scheduled-expiry")
+        .expireAfterAccess(Duration.ofMillis(100))
+        .scheduledExpiration()
+        .removalListener((key, value, why) -> {
+          cause.set(why);
+          removed.countDown();
+        })
+        .build();
+
+    cache.put("key", "value");
+
+    assertTrue(removed.await(5, TimeUnit.SECONDS), "the removal listener must run on the timer");
+    assertEquals(LocalCacheRemovalCause.EXPIRED, cause.get());
+  }
+
+  @Test
   void supportsWeightedCachesLifecycleOperationsAndBackendNeutralRemovalEvents()
       throws InterruptedException {
     CountDownLatch removed = new CountDownLatch(1);
