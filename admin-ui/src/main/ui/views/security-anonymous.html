@@ -4,18 +4,43 @@
             <h1>Anonymous Access</h1>
             <span class="heading-copy">Configure the anonymous user used for unauthenticated repository reads</span>
           </div>
-          <form class="blobstore-form" id="security-anonymous-form" novalidate>
-            <div class="form-grid">
-              <label class="checkbox-field">
-                <input id="security-anonymous-enabled" type="checkbox">
-                <span>Enabled</span>
-              </label>
-              <label><span>User source</span><input id="security-anonymous-source" type="text" value="Local" disabled title="Anonymous users always use the built-in Local source."></label>
-              <label><span>User ID <span class="required-mark">*</span></span><input id="security-anonymous-user-id" type="text" value="anonymous" required></label>
-              <label><span>Realm name <span class="required-mark">*</span></span><input id="security-anonymous-realm-name" type="text" value="NexusAuthorizingRealm" required></label>
-            </div>
-            <div class="form-actions">
-              <button class="create-button" id="save-security-anonymous-button" type="button">Save anonymous access</button>
+          <div id="security-anonymous-load" class="anonymous-load">
+            <span id="security-anonymous-load-status" role="status">Loading…</span>
+            <button id="security-anonymous-retry" type="button" class="create-button secondary" hidden>Retry</button>
+          </div>
+          <form id="security-anonymous-form" novalidate hidden>
+            <fieldset id="security-anonymous-fields">
+              <div class="anonymous-panel">
+                <label class="form-switch anonymous-permission">
+                  <span>Allow anonymous repository reads</span>
+                  <input id="security-anonymous-enabled" type="checkbox" role="switch" aria-describedby="security-anonymous-effect">
+                </label>
+                <p id="security-anonymous-effect" class="anonymous-help"></p>
+              </div>
+              <section class="anonymous-panel" aria-labelledby="security-anonymous-identity">
+                <div class="anonymous-identity-heading">
+                  <h2 id="security-anonymous-identity">Anonymous identity</h2>
+                  <dl><dt>User source</dt><dd data-i18n-skip>Local</dd></dl>
+                </div>
+                <div class="form-grid anonymous-identity-fields">
+                  <div class="form-field">
+                    <label for="security-anonymous-user-id">User ID</label>
+                    <input id="security-anonymous-user-id" type="text" list="security-anonymous-known-users" autocomplete="off" required aria-describedby="security-anonymous-user-help">
+                    <datalist id="security-anonymous-known-users"></datalist>
+                    <small id="security-anonymous-user-help" class="anonymous-help">Use an active local account.</small>
+                  </div>
+                  <div class="form-field">
+                    <label for="security-anonymous-realm-name">Realm name</label>
+                    <select id="security-anonymous-realm-name" required aria-describedby="security-anonymous-realm-id"></select>
+                    <code id="security-anonymous-realm-id" data-i18n-skip></code>
+                  </div>
+                </div>
+              </section>
+            </fieldset>
+            <div class="settings-actions">
+              <span id="security-anonymous-edit-status" role="status" tabindex="-1"></span>
+              <button class="create-button secondary" id="security-anonymous-discard" type="button" disabled>Discard changes</button>
+              <button class="create-button" id="save-security-anonymous-button" type="submit" disabled>Save changes</button>
             </div>
           </form>
         </section>

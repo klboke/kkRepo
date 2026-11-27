@@ -1,0 +1,22 @@
+#security-anonymous-form, #security-anonymous-fields { display: grid; gap: 14px; min-width: 0; }
+#security-anonymous-form { padding-block: 14px 24px; }
+#security-anonymous-fields, .anonymous-identity-heading dl { padding: 0; margin: 0; border: 0; }
+.anonymous-panel, .anonymous-load { padding: 14px 18px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.anonymous-load, .anonymous-permission, .anonymous-identity-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.anonymous-load { margin-top: 14px; }
+.anonymous-permission, .anonymous-identity-heading h2 { margin: 0; font-size: 17px; font-weight: var(--fw-semibold); color: var(--ink-1); }
+.anonymous-permission { min-height: 32px; }
+.anonymous-help, .anonymous-identity-heading dl, #security-anonymous-realm-id { color: var(--ink-3); font-size: var(--fs-sm); }
+p.anonymous-help { margin: 3px 0 0; }
+.anonymous-identity-heading { flex-wrap: wrap; }
+.anonymous-identity-heading dl { display: flex; gap: 6px; }
+.anonymous-identity-heading dd { margin: 0; color: var(--ink-2); }
+.anonymous-identity-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
+.anonymous-identity-fields .form-field { min-width: 0; }
+.anonymous-identity-fields :is(input,select) { width: 100%; min-width: 0; font-weight: normal; }
+.anonymous-identity-fields :is(small,code) { font-weight: normal; overflow-wrap: anywhere; }
+#security-anonymous-realm-id { justify-self: start; }
+@media (max-width: 650px) {
+  .anonymous-identity-fields { grid-template-columns: minmax(0, 1fr); }
+  .anonymous-panel { padding: 12px 14px; }
+}

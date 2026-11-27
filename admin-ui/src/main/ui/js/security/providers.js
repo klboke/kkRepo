@@ -9,10 +9,8 @@ import {
   textInputValue,
   updateRequiredMarker,
   updateRequiredMarkers,
-  validateRequiredFields,
 } from "../controls/fields.js";
 import { showToast } from "../controls/toast.js";
-import { accessState, securityAnonymousRequiredFields } from "./access.js";
 import { fetchJson, responseErrorMessage } from "../shell/http.js";
 
 let securityLdap = null;
@@ -521,57 +519,16 @@ async function saveSecurityOidc() {
   }
 }
 
-async function loadSecurityAnonymous() {
-  accessState.securityAnonymous = await fetchJson(
-    "/internal/security/anonymous",
-    { enabled: false, userSource: "Local", userId: "anonymous", realmName: "NexusAuthorizingRealm" },
-    "Failed to load anonymous settings");
-  renderSecurityAnonymous();
-}
-
-function renderSecurityAnonymous() {
-  const settings = accessState.securityAnonymous || {};
-  document.getElementById("security-anonymous-enabled").checked = Boolean(settings.enabled);
-  document.getElementById("security-anonymous-source").value = "Local";
-  document.getElementById("security-anonymous-user-id").value = settings.userId || "anonymous";
-  document.getElementById("security-anonymous-realm-name").value = settings.realmName || "NexusAuthorizingRealm";
-}
-
-async function saveSecurityAnonymous() {
-  if (!validateRequiredFields(securityAnonymousRequiredFields)) return;
-  const payload = {
-    enabled: document.getElementById("security-anonymous-enabled").checked,
-    userSource: "Local",
-    userId: document.getElementById("security-anonymous-user-id").value.trim() || "anonymous",
-    realmName: document.getElementById("security-anonymous-realm-name").value.trim() || "NexusAuthorizingRealm"
-  };
-  try {
-    const response = await fetch("/internal/security/anonymous", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) throw new Error(await responseErrorMessage(response));
-    accessState.securityAnonymous = await response.json();
-    renderSecurityAnonymous();
-    showToast("Anonymous access saved.", "ok");
-  } catch (error) {
-    showToast(`Save failed: ${error.message}`, "error");
-  }
-}
-
 export {
   applyOriginAwarePlaceholders,
   bindSecurityProviderJson,
   clearSecurityLdapRequiredErrors,
   ldapRequiredFields,
-  loadSecurityAnonymous,
   loadSecurityLdap,
   loadSecurityOidc,
   oidcRequiredFields,
   refreshSecurityLdapRequiredMarkers,
   refreshSecurityOidcRequiredMarkers,
-  saveSecurityAnonymous,
   saveSecurityLdap,
   saveSecurityOidc,
 };

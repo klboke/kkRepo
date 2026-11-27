@@ -82,3 +82,17 @@
   #repositories-view .usage-table :is(td,th) { padding-inline: 6px; }
 }
 .user-picker-options[popover] { position: fixed; inset: auto; margin: 0; width: min-content; }
+
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.settings-actions [role="status"] { margin-inline-end: auto; color: var(--ink-3); font-size: var(--fs-sm); }
+.settings-actions button:disabled, .realm-editor button:disabled {
+  color: var(--ink-3);
+  background: var(--surface-muted);
+  border-color: var(--line);
+  opacity: .6;
+  cursor: default;
+  box-shadow: none;
+}
+@media (max-width: 650px) {
+  .settings-actions [role="status"] { flex-basis: 100%; }
+}

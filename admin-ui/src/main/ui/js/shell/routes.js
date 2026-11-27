@@ -24,11 +24,11 @@ import {
   loadSecurityApiKeys,
 } from "../security/api-keys.js";
 import {
-  loadSecurityAnonymous,
   loadSecurityLdap,
   loadSecurityOidc,
 } from "../security/providers.js";
 import { canAccessAdminView, sessionState } from "./session.js";
+import { loadSecurityAnonymous } from "../security/anonymous.js";
 import { loadSecurityRealms } from "../security/realms.js";
 import { loadBlobStores } from "../storage/blob-stores.js";
 import { loadUiSettings } from "../system/appearance.js";

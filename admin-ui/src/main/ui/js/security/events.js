@@ -16,7 +16,6 @@ import {
   saveSecurityPrivilege,
   saveSecurityRole,
   saveSecurityUser,
-  securityAnonymousRequiredFields,
   securityPrivilegeRequiredFields,
   securityPrivileges,
   securityRoleRequiredFields,
@@ -42,10 +41,10 @@ import {
   oidcRequiredFields,
   refreshSecurityLdapRequiredMarkers,
   refreshSecurityOidcRequiredMarkers,
-  saveSecurityAnonymous,
   saveSecurityLdap,
   saveSecurityOidc,
 } from "./providers.js";
+import { bindAnonymousEditor } from "./anonymous.js";
 import { bindRealmEditor } from "./realms.js";
 import { switchView } from "../shell/routes.js";
 
@@ -157,12 +156,7 @@ export function bindSecurityEvents() {
     });
   });
   bindSecurityProviderJson("oidc");
-  document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
-  document.getElementById("security-anonymous-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    saveSecurityAnonymous();
-  });
-  bindRequiredFieldErrors(securityAnonymousRequiredFields);
+  bindAnonymousEditor();
   document.getElementById("copy-security-api-key").addEventListener("click", copySecurityApiKey);
   document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
   document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);

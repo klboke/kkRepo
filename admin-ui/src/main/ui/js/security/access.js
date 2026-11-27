@@ -19,7 +19,6 @@ let securityPrivileges = [];
 
 const accessState = {
   securityUserRoleFilter: "",
-  securityAnonymous: null,
 };
 
 let securityUserMode = "create";
@@ -56,10 +55,6 @@ const securityPrivilegeRequiredFields = [
   { id: "security-privilege-id", label: "Privilege ID" }
 ];
 
-const securityAnonymousRequiredFields = [
-  { id: "security-anonymous-user-id", label: "User ID" },
-  { id: "security-anonymous-realm-name", label: "Realm name" }
-];
 
 function isLocalSource(source) {
   return lowerOrEmpty(source) === "local";
@@ -812,7 +807,6 @@ export {
   saveSecurityPrivilege,
   saveSecurityRole,
   saveSecurityUser,
-  securityAnonymousRequiredFields,
   securityPrivilegeRequiredFields,
   securityPrivileges,
   securityRoleRequiredFields,
