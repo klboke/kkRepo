@@ -18,7 +18,6 @@ let securityRoles = [];
 let securityPrivileges = [];
 
 const accessState = {
-  securityRealms: [],
   securityUserRoleFilter: "",
   securityAnonymous: null,
 };

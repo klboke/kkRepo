@@ -45,8 +45,8 @@ import {
   saveSecurityAnonymous,
   saveSecurityLdap,
   saveSecurityOidc,
-  saveSecurityRealms,
 } from "./providers.js";
+import { bindRealmEditor } from "./realms.js";
 import { switchView } from "../shell/routes.js";
 
 export function bindSecurityEvents() {
@@ -132,7 +132,7 @@ export function bindSecurityEvents() {
     const deleteButton = event.target.closest(".delete-security-privilege-button");
     if (deleteButton) deleteSecurityPrivilege(deleteButton.dataset.id);
   });
-  document.getElementById("save-security-realms-button").addEventListener("click", saveSecurityRealms);
+  bindRealmEditor();
   document.getElementById("save-security-ldap-button").addEventListener("click", saveSecurityLdap);
   document.getElementById("security-ldap-form").addEventListener("submit", (event) => {
     event.preventDefault();

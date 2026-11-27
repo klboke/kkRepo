@@ -2,15 +2,26 @@
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-waypoints" aria-hidden="true"></span></span>
             <h1>Realms</h1>
-            <span class="heading-copy">Manage local, LDAP and OIDC authentication priority</span>
+            <span class="heading-copy">Higher realms take priority when they support the same sign-in method.</span>
           </div>
-          <div class="action-bar">
-            <button class="create-button" id="save-security-realms-button" type="button">Save realm order</button>
+          <div class="realm-editor" id="security-realm-editor">
+            <section aria-labelledby="realm-order-title">
+              <div class="realm-section-heading">
+                <h2 id="realm-order-title">Authentication order</h2>
+                <span id="realm-enabled-count"></span>
+              </div>
+              <ol class="realm-list" id="realm-enabled-list" role="list" aria-labelledby="realm-order-title"></ol>
+            </section>
+            <section id="realm-disabled-section" aria-labelledby="realm-disabled-title" hidden>
+              <div class="realm-section-heading"><h2 id="realm-disabled-title">Disabled realms</h2></div>
+              <ul class="realm-list" id="realm-disabled-list" role="list" aria-labelledby="realm-disabled-title"></ul>
+            </section>
+            <div class="realm-actions">
+              <span id="realm-edit-status" role="status" tabindex="-1"></span>
+              <button class="create-button secondary" id="reload-security-realms-button" type="button" hidden>Refresh</button>
+              <button class="create-button secondary" id="discard-security-realms-button" type="button" disabled>Discard changes</button>
+              <button class="create-button" id="save-security-realms-button" type="button" disabled>Save changes</button>
+            </div>
+            <span class="realm-announcement" id="realm-announcement" role="status"></span>
           </div>
-          <div class="nx-table-frame">
-            <table class="nx-table">
-              <thead><tr><th>Enabled</th><th>Priority</th><th>Realm</th><th>Type</th><th>Source</th></tr></thead>
-              <tbody id="security-realm-table"></tbody>
-            </table>
-          </div>
-          </section>
+        </section>

@@ -27,9 +27,9 @@ import {
   loadSecurityAnonymous,
   loadSecurityLdap,
   loadSecurityOidc,
-  loadSecurityRealms,
 } from "../security/providers.js";
 import { canAccessAdminView, sessionState } from "./session.js";
+import { loadSecurityRealms } from "../security/realms.js";
 import { loadBlobStores } from "../storage/blob-stores.js";
 import { loadUiSettings } from "../system/appearance.js";
 

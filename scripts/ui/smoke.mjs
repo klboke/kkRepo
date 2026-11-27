@@ -52,6 +52,76 @@ async function verifyPageAlignment(view, fullWidthBlocks, leftAlignedControls) {
   }
 }
 
+async function verifyRealmEditor(page) {
+  const endpoint = "**/internal/security/realms";
+  const fixtures = [
+    { realmId: "local", type: "LOCAL", name: "Local", enabled: true, priority: 7 },
+    { realmId: "ldap", type: "LDAP", name: "Build directory", enabled: true, priority: 40, attributes: { source: "build-users" } },
+    { realmId: "oidc", type: "OIDC", name: "OIDC", enabled: true, priority: 120 },
+  ];
+  const writes = [];
+  await page.route(endpoint, route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: fixtures });
+    assert.equal(route.request().method(), "PUT");
+    const commands = route.request().postDataJSON();
+    writes.push(commands);
+    if (writes.length === 1) return route.fulfill({ status: 503, json: { message: "Try again" } });
+    for (const command of commands) Object.assign(fixtures.find(row => row.realmId === command.realmId), command);
+    return route.fulfill({ json: fixtures });
+  });
+  try {
+    await page.goto(origin + "/admin/#admin/security/realms");
+    const view = page.locator("#security-realms-view");
+    const save = view.getByRole("button", { name: "Save changes" });
+    const active = view.locator("#realm-enabled-list .realm-identity strong");
+    await expect(active).toHaveText(["Local", "Build directory", "OIDC"]);
+    await expect(save).toBeDisabled();
+    await expect(view.getByText("build-users")).toBeVisible();
+    await expect(view.locator('[data-realm-id="local"] input')).toHaveCount(0);
+    const up = view.getByRole("button", { name: "Move up Build directory" });
+    await up.press("Enter");
+    await expect(active.first()).toHaveText("Build directory");
+    await expect(view.getByRole("button", { name: "Move down Build directory" })).toBeFocused();
+    await view.getByRole("button", { name: "Discard changes" }).click();
+    await expect(active.first()).toHaveText("Local");
+    await expect(save).toBeDisabled();
+    await up.click();
+    await view.getByRole("checkbox", { name: "Enabled OIDC" }).press("Space");
+    await expect(view.locator("#realm-disabled-list .realm-identity strong")).toHaveText("OIDC");
+    await expect(view.getByRole("checkbox", { name: "Disabled OIDC" })).toBeFocused();
+    assert.equal(writes.length, 0);
+    await save.click();
+    await expect(view.locator("#realm-edit-status")).toHaveText("Unsaved changes");
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(view.locator("#realm-edit-status")).toHaveText("Realms saved.");
+    const expected = [
+      { realmId: "ldap", priority: 7 }, { realmId: "local", priority: 40 },
+      { realmId: "oidc", priority: 120, enabled: false },
+    ];
+    assert.deepEqual(writes, [expected, expected]);
+    await page.reload();
+    await expect(active).toHaveText(["Build directory", "Local"]);
+    await expect(save).toBeDisabled();
+    await view.getByRole("checkbox", { name: "Disabled OIDC" }).click();
+    await expect(active).toHaveText(["Build directory", "Local", "OIDC"]);
+    await view.getByRole("checkbox", { name: "Enabled OIDC" }).click();
+    await expect(save).toBeDisabled();
+
+    fixtures.find(row => row.realmId === "local").priority = 7;
+    await page.reload();
+    await expect(active).toHaveText(["Build directory", "Local"]);
+    await view.getByRole("button", { name: "Move up Local", exact: true }).click();
+    await save.click();
+    await expect(view.locator("#realm-edit-status")).toHaveText("Realms saved.");
+    assert.deepEqual(writes[2], [{ realmId: "ldap", priority: 8 }]);
+    await page.reload();
+    await expect(active).toHaveText(["Local", "Build directory"]);
+  } finally {
+    await page.unroute(endpoint);
+  }
+}
+
 async function verifyControlIcons(page) {
   const missingFilterIcons = await page.locator('input[type="search"]').evaluateAll(inputs => inputs
     .filter(input => input.closest(".filter-box") || input.placeholder.startsWith("Filter"))
@@ -245,6 +315,7 @@ try {
         [".cleanup-tabs", ".cleanup-tab-panel.is-active .nx-table-frame"], []);
     }
   }
+  await verifyRealmEditor(page);
   await page.goto(origin + "/admin/#admin/repository/docker");
   const dockerView = page.locator("#docker-registry-view");
   await expect(dockerView.locator("#docker-connector-summary")).toContainText("Active ports");

@@ -1,0 +1,39 @@
+.realm-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding-block: 16px 24px; }
+.realm-section-heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.realm-section-heading h2 { margin: 0; color: var(--ink-1); font-size: 17px; }
+#realm-enabled-count, .realm-description, .realm-toggle, .realm-required, #realm-edit-status {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+.realm-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.realm-list:empty { display: none; }
+.realm-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(132px, max-content) 78px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+}
+.realm-row + .realm-row { border-top: 1px solid var(--line); }
+.realm-rank { color: var(--ink-3); font-size: 16px; font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+.realm-identity { grid-column: 2; min-width: 0; overflow-wrap: anywhere; }
+.realm-identity strong { color: var(--ink-1); }
+.realm-description { display: block; margin-top: 2px; }
+.realm-required, .realm-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; justify-self: start; }
+.realm-toggle { cursor: pointer; }
+.realm-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--brand); }
+.realm-moves { display: flex; justify-content: flex-end; gap: 5px; }
+.realm-moves .row-action { display: grid; place-items: center; min-width: 34px; min-height: 34px; padding: 4px; }
+.realm-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+#realm-edit-status { margin-inline-end: auto; }
+#realm-edit-status.is-dirty { color: var(--warning); font-weight: var(--fw-semibold); }
+.realm-editor button:disabled { color: var(--ink-3); background: var(--surface-muted); border-color: var(--line); opacity: .6; cursor: default; box-shadow: none; }
+.realm-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 650px) {
+  .realm-row { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px; }
+  .realm-rank { grid-area: 1 / 1 / 3 / 2; align-self: start; }
+  .realm-identity { grid-area: 1 / 2; }
+  .realm-toggle, .realm-required { grid-area: 2 / 2; }
+  .realm-moves { grid-area: 1 / 3 / 3 / 4; }
+  #realm-edit-status { flex-basis: 100%; }
+}
