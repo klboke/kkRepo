@@ -1,0 +1,28 @@
+        <section class="view" id="docker-registry-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-container" aria-hidden="true"></span></span>
+            <h1>Docker Registry</h1>
+            <span class="heading-copy">Manage Docker connector runtime and repository cache</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="docker-connectors-refresh-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh connectors</button>
+            <button class="create-button secondary" id="docker-cache-clear-button" type="button">Clear Docker cache</button>
+          </div>
+          <div class="docker-ops-layout">
+            <section class="ops-panel">
+              <div class="ops-panel-head">Connector runtime</div>
+              <div class="summary-grid compact-summary" id="docker-connector-summary"></div>
+              <div class="nx-table-frame">
+                <table class="nx-table compact docker-connector-table">
+                  <thead><tr><th>Repository</th><th>Type</th><th>Port</th><th>Public URL</th><th>State</th><th>Active</th></tr></thead>
+                  <tbody id="docker-connector-table"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="ops-panel">
+              <div class="ops-panel-head">Transfer limits</div>
+              <div class="summary-grid compact-summary" id="docker-transfer-summary"></div>
+              <div class="ops-status" id="docker-operations-status"></div>
+            </section>
+          </div>
+        </section>

@@ -1,10 +1,8 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { join } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const source = readFileSync(join(__dirname, "../../main/resources/META-INF/resources/admin/assets/admin.js"), "utf8");
 const key = "GenericToken.result-fixture";
 
 function setup() {
@@ -16,7 +14,7 @@ function setup() {
     return elements.get(id);
   }
   const messages = [], copied = [];
-  const ctx = vm.createContext({
+  const ctx = declarations.context({
     document: { getElementById: element },
     apiKeyOwnerPicker: { validate: () => true, close() {} }, apiKeyFormGeneration: 0,
     validateRequiredFields: () => true, clearRequiredFieldErrors() {}, securityApiKeyRequiredFields: [],
@@ -24,8 +22,7 @@ function setup() {
     openFormModal: id => { element(id).hidden = false; }, closeFormModal: id => { element(id).hidden = true; },
     copyLocationText: async value => copied.push(value), showToast: message => messages.push(message)
   });
-  vm.runInContext(source.slice(source.indexOf("function hideSecurityApiKeyForm("),
-    source.indexOf("async function deleteSecurityApiKey(")), ctx);
+  vm.runInContext(declarations("hideSecurityApiKeyForm", "hideSecurityApiKeyResult", "copySecurityApiKey", "saveSecurityApiKey"), ctx);
   return { ctx, element, copied, messages };
 }
 

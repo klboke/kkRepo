@@ -1,0 +1,42 @@
+        <section class="view system-settings-view" id="ui-settings-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-sliders-horizontal" aria-hidden="true"></span></span>
+            <h1>UI Settings</h1>
+            <span class="heading-copy">Configure the default UI language and theme shared by all replicas</span>
+          </div>
+          <form class="blobstore-form" id="ui-settings-form" novalidate>
+            <div class="form-grid">
+              <label>
+                <span>Default language <span class="required-mark">*</span></span>
+                <select id="ui-default-language" required>
+                  <option value="browser">Follow browser</option>
+                  <option value="zh-CN">Chinese</option>
+                  <option value="en" selected>English</option>
+                  <option value="fr" lang="fr" data-i18n-skip>Français</option>
+                  <option value="de" lang="de" data-i18n-skip>Deutsch</option>
+                  <option value="es" lang="es" data-i18n-skip>Español</option>
+                  <option value="it" lang="it" data-i18n-skip>Italiano</option>
+                  <option value="pt-BR" lang="pt-BR" data-i18n-skip>Português (Brasil)</option>
+                  <option value="nl" lang="nl" data-i18n-skip>Nederlands</option>
+                  <option value="pl" lang="pl" data-i18n-skip>Polski</option>
+                  <option value="ru" lang="ru" data-i18n-skip>Русский</option>
+                  <option value="uk" lang="uk" data-i18n-skip>Українська</option>
+                  <option value="ja" lang="ja" data-i18n-skip>日本語</option>
+                  <option value="ko" lang="ko" data-i18n-skip>한국어</option>
+                  <option value="tr" lang="tr" data-i18n-skip>Türkçe</option>
+                </select>
+              </label>
+              <label>
+                <span>Default theme <span class="required-mark">*</span></span>
+                <select id="ui-default-theme" required>
+                  <option value="default" selected>Default</option>
+                </select>
+              </label>
+              <p class="form-note full-width">These preferences are stored in the database and apply to the administration, browse, and sign-in UI on every replica. The current kkRepo design is provided as the default CSS theme template.</p>
+              <p class="form-note full-width ui-theme-preview-status" id="ui-theme-preview-status" role="status" aria-live="polite" hidden>Theme preview is active. Save UI settings to make it the default.</p>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-ui-settings-button" type="button">Save UI settings</button>
+            </div>
+          </form>
+        </section>

@@ -1,0 +1,295 @@
+
+.tree-row:hover { background: #f3f3f3; }
+
+.tree-row.is-selected,
+.tree-row.is-selected:hover { background: #e6e6e6; }
+
+.tree-toggle {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border: 1px solid #b5b5b5;
+  background: #ffffff;
+  color: #555555;
+  font-size: 13px;
+  line-height: 12px;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-toggle:disabled {
+  visibility: hidden;
+}
+
+.tree-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  flex: 0 0 18px;
+}
+
+.tree-icon {
+  width: 16px;
+  height: 14px;
+}
+
+.tree-label {
+  font-size: 14px;
+  color: var(--text);
+  padding: 0 2px;
+}
+
+.tree-label.clickable {
+  cursor: pointer;
+}
+
+.tree-label.clickable:hover {
+  color: #1d5fbf;
+}
+
+.tree-loading, .tree-empty, .tree-empty-child, .tree-error {
+  font-style: italic;
+  color: var(--muted);
+  padding: 4px 0 4px 4px;
+  font-size: 13px;
+}
+
+.tree-error { color: var(--danger); }
+
+/* --- Split layout: tree on left, detail on right --- */
+
+.browse-split {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: stretch;
+  height: auto;
+  min-height: 360px;
+  overflow: hidden;
+}
+
+/* Tree/detail widths are user-resizable via .split-handle; --tree-pane-width is set from JS. */
+.tree-left {
+  flex: 0 0 var(--tree-pane-width, 60%);
+  width: var(--tree-pane-width, 60%);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 22px 32px 22px;
+  border-right: 1px solid #eaeaea;
+}
+
+.tree-left .tree-root { padding: 0; }
+
+.split-handle {
+  position: relative;
+  flex: 0 0 6px;
+  margin: 0 -3px;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.split-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background-color 0.12s;
+}
+
+.split-handle:hover::after,
+.split-handle:focus-visible::after,
+.browse-split.is-resizing .split-handle::after {
+  background: var(--brand, #16883b);
+}
+
+.browse-split.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.detail-right {
+  flex: 1 1 0;
+  min-width: 0;
+  container: browse-detail / inline-size;
+  padding: 16px 18px 32px 18px;
+  background: #ffffff;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.detail-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 14px;
+}
+
+/* --- Detail pane (component + asset) --- */
+
+.detail-pane { display: grid; gap: 12px; }
+
+.detail-head-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.detail-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text);
+  padding: 6px 8px;
+  background: #f5f5f5;
+  border: 1px solid #e3e3e3;
+  border-radius: 3px;
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-crumb .crumb-icon { flex: 0 0 16px; }
+
+.detail-delete-button {
+  flex: 0 0 auto;
+  min-width: 72px;
+  height: 31px;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-md);
+  background: #ffffff;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+
+.detail-delete-button:hover {
+  background: var(--danger-bg);
+}
+
+.detail-delete-button:disabled {
+  border-color: var(--danger-line);
+  color: var(--danger-line);
+  cursor: wait;
+}
+
+.analyze-btn {
+  width: 100%;
+  height: 32px;
+  border: 1px solid #cccccc;
+  border-radius: 3px;
+  background: #f4f4f4;
+  color: #555555;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  padding: 0 10px;
+}
+
+.panel {
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #f5f5f5;
+  border-bottom: 1px solid #e0e0e0;
+  color: #333333;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel-body {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: minmax(0, min(42%, 13rem)) minmax(0, 1fr);
+  column-gap: 12px;
+  padding: 3px 0;
+}
+
+.kv-key,
+.kv-val { overflow-wrap: anywhere; }
+.kv-key { color: var(--muted); }
+.kv-val code {
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 13px;
+}
+
+@container browse-detail (width < 320px) {
+  .kv {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
+}
+
+.platform-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 8px;
+}
+
+.platform-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(120px, 1.2fr) minmax(70px, auto);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 3px 0;
+}
+
+.platform-name,
+.platform-digest,
+.platform-size {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-name {
+  font-weight: 600;
+}
+
+.platform-digest {
+  color: var(--muted);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.platform-size {
+  justify-self: end;
+  color: var(--muted);
+}
+
+.docker-descriptor-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  border-top: 1px solid #eeeeee;
+  padding-top: 8px;
+}

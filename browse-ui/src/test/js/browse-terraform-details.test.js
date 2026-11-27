@@ -1,28 +1,11 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
 function loadTerraformDetails() {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const repoUrlStart = source.indexOf("function repositoryBaseUrl");
-  const repoUrlEnd = source.indexOf("function dockerRepositoryBaseUrl", repoUrlStart);
-  const pathStart = source.indexOf("function pathSegments");
-  const usageStart = source.indexOf("function hasDirectoryUsage", pathStart);
-  const terraformStart = source.indexOf("function terraformUsageDetail", usageStart);
-  const usageEnd = source.indexOf("function mavenUsageDetail", usageStart);
-  const terraformEnd = source.indexOf("async function usageDetailForEntry", terraformStart);
-  assert.notEqual(repoUrlStart, -1);
-  assert.notEqual(repoUrlEnd, -1);
-  assert.notEqual(pathStart, -1);
-  assert.notEqual(usageStart, -1);
-  assert.notEqual(terraformStart, -1);
-  assert.notEqual(usageEnd, -1);
-  assert.notEqual(terraformEnd, -1);
-  const context = vm.createContext({
+
+  const context = declarations.context({
     repositoriesCache: [],
     URL,
     currentRepository: () => ({ format: "terraform" }),
@@ -40,10 +23,14 @@ function loadTerraformDetails() {
     },
   });
   vm.runInContext(
-    `${source.slice(repoUrlStart, repoUrlEnd)}\n`
-      + `${source.slice(pathStart, usageStart)}\n`
-      + `${source.slice(usageStart, usageEnd)}\n`
-      + `${source.slice(terraformStart, terraformEnd)}\n`
+    `${declarations("repositoryBaseUrl")}\n`
+      + `${declarations("pathSegments", "latestVersion")}\n`
+      + `${declarations("hasDirectoryUsage")}\n`
+      + `${declarations(
+        "terraformUsageDetail", "swiftUsageDetail", "ansibleGalaxyUsageDetail", "condaUsageDetail",
+        "conanUsageDetail", "aptUsageDetail", "alpineUsageDetail", "rUsageDetail",
+        "huggingFaceUsageDetail",
+      )}\n`
       + "globalThis.hasDirectoryUsage = hasDirectoryUsage;\n"
       + "globalThis.terraformUsageDetail = terraformUsageDetail;",
     context,
@@ -91,13 +78,6 @@ test("keeps protocol snippets on complete Terraform coordinates", () => {
 });
 
 test("uses the rendered tree entry when restoring a direct asset URL", async () => {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("function centerTreeRow");
-  const end = source.indexOf("async function revealTreePath", start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
 
   const path = "v1/providers/acme/demo/1.0.10/download/linux/amd64/"
     + "terraform-provider-demo_1.0.10_linux_amd64.zip";
@@ -115,7 +95,7 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
   };
   const node = { querySelector: () => row };
   let displayed = null;
-  const context = vm.createContext({
+  const context = declarations.context({
     VERSION_DIR_RE: /^\d/,
     document: { querySelector: () => node },
     findCachedTreeEntry: () => null,
@@ -129,7 +109,7 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
     treeNodeEntries: new WeakMap([[node, entry]]),
   });
   vm.runInContext(
-    `${source.slice(start, end)}\nglobalThis.selectInitialTreePath = selectInitialTreePath;`,
+    `${declarations("centerTreeRow", "selectInitialTreePath")}\nglobalThis.selectInitialTreePath = selectInitialTreePath;`,
     context,
   );
   await context.selectInitialTreePath();
@@ -138,18 +118,11 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
 });
 
 test("renders folder details with the repository format icon", async () => {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("async function showComponentDetail");
-  const end = source.indexOf("async function showAssetDetail", start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
 
   const mount = { innerHTML: "", isConnected: true };
   let rendered = null;
   const entry = { path: "v1/providers/acme/demo", leaf: false };
-  const context = vm.createContext({
+  const context = declarations.context({
     state: { repo: "terraform-hosted", path: entry.path },
     currentRepository: () => ({ format: "terraform", type: "hosted" }),
     canDeleteBrowseContent: () => true,
@@ -165,8 +138,8 @@ test("renders folder details with the repository format icon", async () => {
     }),
   });
   vm.runInContext(
-    source.slice(source.indexOf("function canDeleteBrowseDirectory"), source.indexOf("function hasUploadPermission"))
-      + `${source.slice(start, end)}\nglobalThis.showComponentDetail = showComponentDetail;`,
+    declarations("canDeleteBrowseDirectory", "canDeleteBrowseComponentDirectory")
+      + `${declarations("showComponentDetail")}\nglobalThis.showComponentDetail = showComponentDetail;`,
     context,
   );
   await context.showComponentDetail(entry);
@@ -180,24 +153,17 @@ test("renders folder details with the repository format icon", async () => {
 });
 
 test("toggles a detail folder closed on the second click", async () => {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("async function activateTreeBranch");
-  const end = source.indexOf("function buildTreeNode", start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
 
   let expanded = false;
   let detailRenders = 0;
   const entry = { name: "providers", path: "v1/providers", leaf: false };
-  const context = vm.createContext({
+  const context = declarations.context({
     VERSION_DIR_RE: /^\d/,
     hasDirectoryUsage: () => true,
     showComponentDetail: async () => { detailRenders += 1; },
   });
   vm.runInContext(
-    `${source.slice(start, end)}\nglobalThis.activateTreeBranch = activateTreeBranch;`,
+    `${declarations("activateTreeBranch")}\nglobalThis.activateTreeBranch = activateTreeBranch;`,
     context,
   );
   const toggleExpand = async () => { expanded = !expanded; };

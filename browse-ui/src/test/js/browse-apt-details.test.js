@@ -1,20 +1,9 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const source = readFileSync(resolve(__dirname,
-  "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-
-function extractFunction(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, name);
-  const end = source.indexOf("\n}\n", start);
-  assert.notEqual(end, -1, name);
-  const asyncStart = source.slice(start - 6, start) === "async " ? start - 6 : start;
-  return source.slice(asyncStart, end + 3);
-}
+const extractFunction = name => declarations(name);
 
 async function loadRepository(apt = { distribution: "focal", component: "universe" }) {
   const requests = [];
@@ -22,7 +11,7 @@ async function loadRepository(apt = { distribution: "focal", component: "univers
     name: "ubuntu-focal-amd64", format: "APT", type: "HOSTED", online: true,
     url: "/r/ubuntu-focal-amd64/", apt,
   };
-  const context = vm.createContext({
+  const context = declarations.context({
     repositoriesCache: [], state: { repo: repository.name, path: "" }, URL,
     window: { location: { origin: "https://repo.example" } },
     fetch: async (url) => {
@@ -41,6 +30,7 @@ async function loadRepository(apt = { distribution: "focal", component: "univers
     "fetchRepositories", "normalizeRepository", "currentRepository", "repositoryBaseUrl",
     "aptUsageDetail", "usageDetailForEntry", "showComponentDetail",
   ].map(extractFunction).join("\n"), context);
+  context.usageProviders = new Map([["apt", context.aptUsageDetail]]);
   context.repositoriesCache = await context.fetchRepositories();
   return { context, requests };
 }

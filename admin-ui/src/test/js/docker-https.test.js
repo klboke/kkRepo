@@ -1,10 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
-const proxySettings = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/proxy-settings.js'), 'utf8');
 
 function form(repo) {
   const elements = new Map();
@@ -27,16 +24,13 @@ function form(repo) {
     'refreshRepositoryBlobStoreLock', 'refreshRepositoryRemoteDefaults', 'updateRequiredMarkers',
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
     'openFormModal', 'setConanManifestSettings']) context[name] = () => {};
-  vm.createContext(context);
-  vm.runInContext(proxySettings, context);
+  declarations.context(context);
+  context.proxySettings = require("../../../../scripts/ui/module-fixture.cjs")("admin", "proxy-settings", context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
-  vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
-    source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);
+  vm.runInContext(declarations("MINIMUM_RELEASE_AGE_FORMATS", "proxyCommand", "proxyFormValues"), context);
   for (const name of ['refreshRepositoryRecipeControls', 'repositoryFormPayload',
     'setRepositoryFormDefaults', 'showEditRepositoryForm']) {
-    const start = source.indexOf(`function ${name}(`);
-    const end = source.indexOf('\nfunction ', start + 1);
-    vm.runInContext(source.slice(start, end), context);
+    vm.runInContext(declarations(name), context);
   }
   context.setRepositoryFormDefaults();
   element('repository-recipe').value = 'docker-hosted';
@@ -63,10 +57,9 @@ test('HTTPS form preserves both endpoints and can clear the named TLS override',
 test('connector URL reflects its actual transport independently of the console', () => {
   const context = { window: { location: { protocol: 'https:', hostname: 'registry.example' } },
     lowerOrEmpty: value => (value || '').toLowerCase() };
-  vm.createContext(context);
-  const start = source.indexOf('function repositoryDisplayUrl(');
-  const end = source.indexOf('\nasync function ', start);
-  vm.runInContext(source.slice(start, end), context);
+  declarations.context(context);
+
+  vm.runInContext(declarations("repositoryDisplayUrl"), context);
   const repo = { format: 'docker', docker: { connectorEnabled: true, connectorPort: 5000 } };
   assert.equal(context.repositoryDisplayUrl(repo), 'http://registry.example:5000/v2/');
   repo.docker.httpsConnectorEnabled = true;

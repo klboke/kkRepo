@@ -1,24 +1,13 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const source = readFileSync(resolve(
-  __dirname,
-  "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-
-function extractFunction(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `${name} should exist`);
-  const end = source.indexOf("\n}\n", start);
-  assert.notEqual(end, -1, `${name} should end at a top-level brace`);
-  return source.slice(start, end + 3);
-}
+const extractFunction = name => declarations(name);
 
 function loadUploadHelpers(globals = {}) {
   const calls = [];
-  const context = vm.createContext({
+  const context = declarations.context({
     currentSession: null,
     hasUploadPermission: () => false,
     pushBrowseRoute: (hash) => calls.push(["pushBrowseRoute", hash]),
@@ -100,7 +89,7 @@ test("empty-state message does not recommend a specific permission grant", () =>
 });
 
 function loadWithRealPermissions(permissions) {
-  const context = vm.createContext({ currentSession: { userId: "u" }, currentPermissions: permissions });
+  const context = declarations.context({ currentSession: { userId: "u" }, currentPermissions: permissions });
   vm.runInContext(
     ["permissionPartMatches", "permissionMatches", "can", "hasUploadPermission",
       "hasRepositoryUploadPermission", "canShowUploadNav", "uploadEmptyStateMessage"]

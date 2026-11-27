@@ -1,0 +1,69 @@
+        <section class="view" id="security-audit-log-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-scroll-text" aria-hidden="true"></span></span>
+            <h1>Audit Log</h1>
+            <span class="heading-copy">Search management mutations recorded in MySQL</span>
+          </div>
+          <form class="audit-filter-bar" id="audit-log-filter-form">
+            <label class="filter-box audit-query">
+              <span class="filter-icon lucide-icon icon-search" aria-hidden="true"></span>
+              <input id="audit-log-query" type="search" placeholder="Search actor, path, permission, details">
+            </label>
+            <label class="filter-box audit-short">
+              <span class="filter-icon lucide-icon icon-users" aria-hidden="true"></span>
+              <input id="audit-log-actor" type="search" placeholder="Actor">
+            </label>
+            <label class="select-filter">
+              <span>Outcome</span>
+              <select id="audit-log-outcome">
+                <option value="">All</option>
+                <option value="SUCCESS">SUCCESS</option>
+                <option value="FAILURE">FAILURE</option>
+              </select>
+            </label>
+            <label class="audit-field">
+              <span>From</span>
+              <input id="audit-log-from" type="datetime-local">
+            </label>
+            <label class="audit-field">
+              <span>To</span>
+              <input id="audit-log-to" type="datetime-local">
+            </label>
+            <button class="create-button" id="audit-log-search-button" type="submit">Search</button>
+            <button class="create-button secondary" id="audit-log-reset-button" type="button">Reset</button>
+          </form>
+          <div class="nx-table-frame audit-table-frame">
+            <table class="nx-table audit-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Actor</th>
+                  <th>Remote</th>
+                  <th>Method</th>
+                  <th>Path</th>
+                  <th>Permission</th>
+                  <th>Status</th>
+                  <th>Outcome</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-log-table"></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar" id="audit-log-pagination">
+            <span class="pagination-summary" id="audit-log-summary">0 results</span>
+            <button class="row-action" id="audit-log-prev-page" type="button" title="Previous page" aria-label="Previous page"><span class="lucide-icon icon-chevron-left" aria-hidden="true"></span></button>
+            <span class="pagination-page" id="audit-log-page-label">Page 1 / 1</span>
+            <button class="row-action" id="audit-log-next-page" type="button" title="Next page" aria-label="Next page"><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span></button>
+            <label class="select-filter pagination-size">
+              <span>Rows</span>
+              <select id="audit-log-size">
+                <option value="15" selected>15</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+          </div>
+        </section>

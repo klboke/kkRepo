@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start kkrepo server in dev profile with hot reload.
-#   - Static assets (HTML/CSS/JS) served directly from src/, refresh browser to see changes
+#   - UI templates, CSS and JS: run mvn -pl admin-ui,browse-ui process-resources, then refresh
 #   - Java class changes: open a 2nd terminal and run `scripts/recompile.sh` (or use IDE auto-build)
 #     to trigger devtools restart of the Spring context
 

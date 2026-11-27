@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 const okPage = page => ({ ok: true, status: 200, json: async () => page });
 const policy = (id, revision, overrides = {}) => ({
@@ -49,21 +47,16 @@ function setup(repositories = [repository()]) {
     showToast: (...args) => toasts.push(args),
     openFormModal: (...args) => opened.push(args), closeFormModal() {}, loadSecurityScanning: async () => {},
   };
-  vm.createContext(context);
+  declarations.context(context);
   require("./authorization-fixture")(context);
-  for (const [start, end] of [
-    ['function escapeHtml(', 'function '],
-    ['async function fetchJson(', 'function uiThemeLabel('],
-    ['async function responseErrorMessage(', 'async function saveBlobStore('],
-    ['async function fetchSecurityScanPage(', 'function resetSecurityScanPage('],
-    ['function switchView(', 'function applyHashRoute('],
-    ['function selectSecurityScanTab(', 'function handleSecurityScanTabKeydown('],
-    ['function formatSecurityScanValidity(', 'function showCreateSecurityScanPolicyForm('],
-  ]) {
-    const begin = source.indexOf(start), finish = source.indexOf(end, begin + start.length);
-    assert.ok(begin >= 0 && finish > begin);
-    vm.runInContext(source.slice(begin, finish), context);
-  }
+  vm.runInContext(declarations(
+    "escapeHtml", "fetchJson", "responseErrorMessage", "fetchSecurityScanPage", "CLEANUP_ROUTE_BASE",
+    "SECURITY_SCAN_ROUTE_BASE", "adminViews", "switchView", "selectSecurityScanTab",
+    "formatSecurityScanValidity", "setSecurityScanDurationSelect", "setSecurityScanResultValidity",
+    "applySecurityScanRepositoryScope", "loadSecurityScanPolicyOptions",
+    "updateSecurityScanRepositoryPolicyHelp", "editSecurityScanRepository",
+    "hideSecurityScanRepositoryForm", "optionalNumber", "saveSecurityScanRepository",
+  ), context);
   return { context, element, requests, saves, toasts, opened };
 }
 
@@ -151,7 +144,6 @@ test('a slower earlier load cannot reopen or overwrite the latest repository edi
   assert.equal(context.securityScanState.repositoryPolicyOptions.length, 0);
 });
 
-
 test('policy loading cannot open a modal after navigation or deployment disablement', async () => {
   for (const change of [
     ({ element }) => { element('security-scanning-view').classList.contains = () => false; },
@@ -168,7 +160,6 @@ test('policy loading cannot open a modal after navigation or deployment disablem
   }
 });
 
-
 test('leaving the repository tab cancels pending loads even if the user returns before completion', async () => {
   for (const returnToRepositories of [false, true]) {
     const { context, opened } = setup();
@@ -182,7 +173,6 @@ test('leaving the repository tab cancels pending loads even if the user returns 
     assert.equal(opened.length, 0, 'must not open a hidden or previously abandoned editor');
   }
 });
-
 
 test('leaving the scanning view cancels a pending editor even when browser history returns directly to repositories', async () => {
   const { context, opened } = setup();
@@ -220,7 +210,6 @@ test('closing the editor cancels a pending load and suppresses an abandoned requ
   assert.equal(toasts.length, 0);
 });
 
-
 test('cancelled HTTP failures produce neither stale toasts nor authentication redirects', async () => {
   for (const status of [500, 401, 403]) {
     const { context, toasts } = setup();
@@ -242,7 +231,6 @@ test('current HTTP failure reports the backend message once', async () => {
   assert.equal(toasts.length, 1);
   assert.match(toasts[0][0], /backend error/);
 });
-
 
 test('authentication failure redirects only while the editor request is current', async () => {
   const { context } = setup();

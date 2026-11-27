@@ -1,19 +1,15 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const resources = resolve(__dirname, "../../main/resources/META-INF/resources/admin");
-const source = readFileSync(resolve(resources, "assets/admin.js"), "utf8");
+const resources = resolve(__dirname, "../../../target/generated-ui/META-INF/resources/admin");
+
 const html = readFileSync(resolve(resources, "index.html"), "utf8");
 
-function extractFunction(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, name);
-  const end = source.indexOf("\n}\n", start);
-  return source.slice(source.slice(start - 6, start) === "async " ? start - 6 : start, end + 3);
-}
+const extractFunction = name => declarations(name);
 
 function deferred() {
   let resolve;
@@ -55,7 +51,7 @@ function start(hash, permissions = ["nexus:*"]) {
     history.push([kind, target]);
     location.href = new URL(target, location).href;
   };
-  const context = vm.createContext({
+  const context = declarations.context({
     initialDataLoaded: false, currentAdminPermissions: [],
     securityScanState: { repositoryEditRequest: 0 },
     window: { location, history: {
@@ -82,11 +78,13 @@ function start(hash, permissions = ["nexus:*"]) {
     selectSecurityScanTab: (tab) => tabs.push(["scan", tab]),
     selectCleanupTab: (tab) => tabs.push(["cleanup", tab]),
   });
-  for (const name of extractFunction("switchView").matchAll(/\b(load\w+)\(/g)) {
+  for (const name of declarations("adminViews").matchAll(/\b(load\w+)\(/g)) {
     context[name[1]] = () => loads.push(name[1]);
   }
-  vm.runInContext(source.slice(source.indexOf("const SECURITY_SCAN_ROUTE_BASE"),
-    source.indexOf("const memberTransfer")) + [
+  vm.runInContext(declarations(
+    "SECURITY_SCAN_ROUTE_BASE", "SECURITY_SCAN_ROUTE_ALIASES", "SECURITY_SCAN_TABS",
+    "CLEANUP_ROUTE_BASE", "CLEANUP_ROUTE_ALIASES", "CLEANUP_TABS", "adminViews", "hashViewRoutes",
+  ) + [
     "sideGroupItems", "permissionPartMatches", "permissionMatches", "canAdmin", "canAccessAdminView",
     "normalizeAdminHash", "securityScanTabFromHash", "cleanupTabFromHash", "viewFromHash",
     "updateHashForView", "switchView", "applyHashRoute", "bootstrap",

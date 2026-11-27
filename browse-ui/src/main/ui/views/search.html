@@ -1,0 +1,119 @@
+        <section class="view" id="search-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-search" aria-hidden="true"></span></span>
+            <h1 id="component-search-title">Search Maven</h1>
+            <span class="heading-copy">Search for components by attribute</span>
+          </div>
+          <form class="search-form" id="component-search-form">
+            <div class="search-format-field" id="component-custom-format-field" hidden>
+              <span id="component-custom-format-label">Format</span>
+              <div class="search-format-combobox" id="component-custom-format-combobox">
+                <select id="component-custom-format" hidden aria-hidden="true" tabindex="-1">
+                <option value="maven2">Maven</option>
+                <option value="npm">npm</option>
+                <option value="pypi">PyPI</option>
+                <option value="cargo">Cargo</option>
+                <option value="pub">Pub</option>
+                <option value="composer">Composer</option>
+                <option value="go">Go</option>
+                <option value="helm">Helm</option>
+                <option value="docker">Docker / OCI</option>
+                <option value="nuget">NuGet</option>
+                <option value="rubygems">RubyGems</option>
+                <option value="yum">Yum</option>
+                <option value="terraform">Terraform</option>
+                <option value="swift">Swift</option>
+                <option value="ansiblegalaxy">Ansible Galaxy</option>
+                <option value="conda">Conda</option>
+                <option value="conan">Conan 2</option>
+                <option value="apt">APT / Debian</option>
+                <option value="alpine">APK / Alpine</option>
+                <option value="r">R / CRAN</option>
+                <option value="huggingface">Hugging Face Models</option>
+                <option value="gitlfs">Git LFS</option>
+                <option value="ohpm">OHPM / HarmonyOS</option>
+                <option value="raw">Raw</option>
+                </select>
+                <button
+                    class="search-format-trigger"
+                    id="component-custom-format-trigger"
+                    type="button"
+                    aria-haspopup="listbox"
+                    aria-expanded="false"
+                    aria-controls="component-custom-format-options"
+                    aria-labelledby="component-custom-format-label component-custom-format-value">
+                  <span class="search-format-value" id="component-custom-format-value">
+                    <span class="format-logo format-logo-maven" aria-hidden="true"></span>
+                    <span>Maven</span>
+                  </span>
+                  <span class="search-format-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                </button>
+                <div class="search-format-popover" id="component-custom-format-popover" hidden>
+                  <input
+                      class="search-format-filter"
+                      id="component-custom-format-filter"
+                      type="search"
+                      placeholder="Filter formats"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-controls="component-custom-format-options"
+                      aria-expanded="false"
+                      aria-label="Filter repository formats"
+                      autocomplete="off">
+                  <div
+                      class="search-format-options"
+                      id="component-custom-format-options"
+                      role="listbox"
+                      aria-labelledby="component-custom-format-label">
+                    <button class="search-format-option" id="component-custom-format-option-maven2" type="button" role="option" aria-selected="true" data-custom-search-format="maven2"><span class="format-logo format-logo-maven" aria-hidden="true"></span><span>Maven</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-npm" type="button" role="option" aria-selected="false" data-custom-search-format="npm"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-pypi" type="button" role="option" aria-selected="false" data-custom-search-format="pypi"><span class="format-logo format-logo-pypi" aria-hidden="true"></span><span>PyPI</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-cargo" type="button" role="option" aria-selected="false" data-custom-search-format="cargo"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-pub" type="button" role="option" aria-selected="false" data-custom-search-format="pub"><span class="format-logo format-logo-pub" aria-hidden="true"></span><span>Pub</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-composer" type="button" role="option" aria-selected="false" data-custom-search-format="composer"><span class="format-logo format-logo-composer" aria-hidden="true"></span><span>Composer</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-go" type="button" role="option" aria-selected="false" data-custom-search-format="go"><span class="format-logo format-logo-go" aria-hidden="true"></span><span>Go</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-helm" type="button" role="option" aria-selected="false" data-custom-search-format="helm"><span class="format-logo format-logo-helm" aria-hidden="true"></span><span>Helm</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-docker" type="button" role="option" aria-selected="false" data-custom-search-format="docker"><span class="format-logo format-logo-docker" aria-hidden="true"></span><span>Docker / OCI</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-nuget" type="button" role="option" aria-selected="false" data-custom-search-format="nuget"><span class="format-logo format-logo-nuget" aria-hidden="true"></span><span>NuGet</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-rubygems" type="button" role="option" aria-selected="false" data-custom-search-format="rubygems"><span class="format-logo format-logo-rubygems" aria-hidden="true"></span><span>RubyGems</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-yum" type="button" role="option" aria-selected="false" data-custom-search-format="yum"><span class="format-logo format-logo-yum" aria-hidden="true"></span><span>Yum</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-terraform" type="button" role="option" aria-selected="false" data-custom-search-format="terraform"><span class="format-logo format-logo-terraform" aria-hidden="true"></span><span>Terraform</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-swift" type="button" role="option" aria-selected="false" data-custom-search-format="swift"><span class="format-logo format-logo-swift" aria-hidden="true"></span><span>Swift</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-ansiblegalaxy" type="button" role="option" aria-selected="false" data-custom-search-format="ansiblegalaxy"><span class="format-logo format-logo-ansiblegalaxy" aria-hidden="true"></span><span>Ansible Galaxy</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-conda" type="button" role="option" aria-selected="false" data-custom-search-format="conda"><span class="format-logo format-logo-conda" aria-hidden="true"></span><span>Conda</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-conan" type="button" role="option" aria-selected="false" data-custom-search-format="conan"><span class="format-logo format-logo-conan" aria-hidden="true"></span><span>Conan 2</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-apt" type="button" role="option" aria-selected="false" data-custom-search-format="apt"><span class="format-logo format-logo-apt" aria-hidden="true"></span><span>APT / Debian</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-alpine" type="button" role="option" aria-selected="false" data-custom-search-format="alpine"><span class="format-logo format-logo-alpine" aria-hidden="true"></span><span>APK / Alpine</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-r" type="button" role="option" aria-selected="false" data-custom-search-format="r"><span class="format-logo format-logo-r" aria-hidden="true"></span><span>R / CRAN</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-gitlfs" type="button" role="option" aria-selected="false" data-custom-search-format="gitlfs"><span class="format-logo format-logo-gitlfs" aria-hidden="true"></span><span>Git LFS</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-huggingface" type="button" role="option" aria-selected="false" data-custom-search-format="huggingface"><span class="format-logo format-logo-huggingface" aria-hidden="true"></span><span>Hugging Face Models</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-raw" type="button" role="option" aria-selected="false" data-custom-search-format="raw"><span class="format-logo format-logo-raw" aria-hidden="true"></span><span>Raw</span></button>
+                  </div>
+                  <div class="search-format-empty" id="component-custom-format-empty" role="status" hidden>No matching formats</div>
+                </div>
+              </div>
+            </div>
+            <label>
+              <span>Keyword</span>
+              <input id="component-keyword" type="search" placeholder="Any">
+            </label>
+            <button class="criteria-button" id="component-search-button" type="submit">Search</button>
+          </form>
+          <div class="result-note"><span class="lucide-icon icon-info" aria-hidden="true"></span> Only showing the first 20 of <span id="component-total">0</span> results</div>
+          <div class="nx-table-frame">
+            <table class="nx-table">
+              <thead>
+                <tr>
+                  <th class="icon-column"></th>
+                  <th>Name</th>
+                  <th>Group</th>
+                  <th>Version</th>
+                  <th>Format</th>
+                  <th>Repository</th>
+                  <th class="expand-column"></th>
+                </tr>
+              </thead>
+              <tbody id="component-table"></tbody>
+            </table>
+          </div>
+        </section>

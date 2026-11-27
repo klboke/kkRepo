@@ -1,0 +1,21 @@
+        <section class="view" id="security-anonymous-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-user-round-x" aria-hidden="true"></span></span>
+            <h1>Anonymous Access</h1>
+            <span class="heading-copy">Configure the anonymous user used for unauthenticated repository reads</span>
+          </div>
+          <form class="blobstore-form" id="security-anonymous-form" novalidate>
+            <div class="form-grid">
+              <label class="checkbox-field">
+                <input id="security-anonymous-enabled" type="checkbox">
+                <span>Enabled</span>
+              </label>
+              <label><span>User source</span><input id="security-anonymous-source" type="text" value="Local" disabled title="Anonymous users always use the built-in Local source."></label>
+              <label><span>User ID <span class="required-mark">*</span></span><input id="security-anonymous-user-id" type="text" value="anonymous" required></label>
+              <label><span>Realm name <span class="required-mark">*</span></span><input id="security-anonymous-realm-name" type="text" value="NexusAuthorizingRealm" required></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-anonymous-button" type="button">Save anonymous access</button>
+            </div>
+          </form>
+        </section>

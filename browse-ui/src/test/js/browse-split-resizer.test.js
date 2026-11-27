@@ -1,22 +1,15 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
 const MIN_PANE_PX = 220;
 
 function loadSplitResizer(environment) {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("const SPLIT_WIDTH_KEY");
-  const end = source.indexOf("async function loadAndRenderTreeLevel", start);
-  assert.notEqual(start, -1, "split resizer block should exist");
-  assert.notEqual(end, -1, "split resizer block should have a stable boundary");
-  const context = vm.createContext(environment);
+
+  const context = declarations.context(environment);
   vm.runInContext(
-    `${source.slice(start, end)}\nglobalThis.initSplitResizer = initSplitResizer;`
+    `${declarations("SPLIT_WIDTH_KEY", "SPLIT_DEFAULT_PCT", "SPLIT_MIN_PANE_PX", "clampSplitPct", "initSplitResizer")}\nglobalThis.initSplitResizer = initSplitResizer;`
       + "\nglobalThis.clampSplitPct = clampSplitPct;",
     context,
   );

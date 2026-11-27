@@ -1,5 +1,5 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
@@ -10,41 +10,28 @@ const globalSearch = require(resolve(
 ));
 
 function loadBrowseSearchHelpers() {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js",
-  ), "utf8");
-  const constantsStart = source.indexOf("const APP_HASH_PREFIX");
-  const constantsEnd = source.indexOf("function browseListHash", constantsStart);
-  const routeStart = source.indexOf("function normalizeSearchFormat");
-  const routeEnd = source.indexOf("function repositoryBrowseHash", routeStart);
-  const browseTargetStart = routeEnd;
-  const browseTargetEnd = source.indexOf("function parseBrowseHash", browseTargetStart);
-  const parseStart = source.indexOf("function parseBrowseHash");
-  const parseEnd = source.indexOf("function pushBrowseRoute", parseStart);
-  const paramsStart = source.indexOf("function componentSearchParams");
-  const paramsEnd = source.indexOf("async function fetchSearchComponents", paramsStart);
-  const openResultStart = source.indexOf("function openSearchResult");
-  const openResultEnd = source.indexOf("function renderRepoList", openResultStart);
-  for (const boundary of [constantsStart, constantsEnd, routeStart, routeEnd,
-    browseTargetStart, browseTargetEnd,
-    parseStart, parseEnd, paramsStart, paramsEnd, openResultStart, openResultEnd]) {
-    assert.notEqual(boundary, -1, "browse search helper boundary should exist");
-  }
+
   const openedSearchResults = [];
-  const context = vm.createContext({
+  const context = declarations.context({
     URLSearchParams,
     readPendingLoginReturnTo: () => null,
     showRepositoryTree: (...args) => openedSearchResults.push(args),
     window: { location: { hash: "" } },
   });
   vm.runInContext(`
-    ${source.slice(constantsStart, constantsEnd)}
-    ${source.slice(routeStart, routeEnd)}
-    ${source.slice(browseTargetStart, browseTargetEnd)}
-    ${source.slice(parseStart, parseEnd)}
-    ${source.slice(paramsStart, paramsEnd)}
-    ${source.slice(openResultStart, openResultEnd)}
+    ${declarations(
+      "APP_HASH_PREFIX", "BROWSE_HASH", "DEFAULT_SEARCH_FORMAT", "ALL_SEARCH_FORMAT",
+      "CUSTOM_SEARCH_FORMAT", "COMPONENT_SEARCH_LIMIT", "SEARCH_ROUTE_FORMAT", "FORMAT_ROUTE_SEGMENT",
+      "SEARCH_FORMAT_LABEL",
+    )}
+    ${declarations(
+      "normalizeSearchFormat", "normalizeCustomSearchFormat", "searchFormatLabel", "searchPageTitle",
+      "searchHash",
+    )}
+    ${declarations("repositoryBrowseHash", "componentBrowsePath")}
+    ${declarations("parseBrowseHash")}
+    ${declarations("componentSearchParams")}
+    ${declarations("openSearchResult")}
     globalThis.searchHash = searchHash;
     globalThis.searchFormatLabel = searchFormatLabel;
     globalThis.searchPageTitle = searchPageTitle;
@@ -204,7 +191,6 @@ test("opens a Hugging Face search result at its immutable revision path", () => 
   );
 });
 
-
 test("Docker group search preserves the selected member for identical tags", () => {
   const helpers = loadBrowseSearchHelpers();
   for (const sourceRepository of ["docker-first", "docker-second"]) {
@@ -218,16 +204,14 @@ test("Docker group search preserves the selected member for identical tags", () 
 });
 
 test("Docker usage snippets use image references for path and connector routing", () => {
-  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("function dockerImageReferenceBase(");
-  const end = source.indexOf("function dockerKindLabel(", start);
-  const context = vm.createContext({URL,
+
+  const context = declarations.context({URL,
     window: {location: {origin: "http://repo.example:8080", host: "repo.example:8080", hostname: "repo.example"}},
     currentRepository: () => context.repo,
     dockerCoordinates: () => ({image: "adoptopenjdk/openjdk8", reference: "latest", digest: "sha256:abc"}),
     usageSnippet: (label, command) => ({label, command}), state: {repo: "docker-hosted"},
   });
-  vm.runInContext(source.slice(start, end), context);
+  vm.runInContext(declarations("dockerImageReferenceBase", "dockerUsageDetail"), context);
   for (const [repo, base] of [
     [{name: "docker-hosted", docker: {}}, "repo.example:8080/docker-hosted"],
     [{name: "docker-hosted", docker: {httpsConnectorEnabled: true, httpsConnectorPort: 5443}}, "repo.example:5443"],
@@ -252,11 +236,8 @@ test("Docker usage snippets use image references for path and connector routing"
   }
 });
 
-
 test("an empty Docker selector page offers continuation and renders older permitted images", async () => {
-  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("async function renderSearch(");
-  const end = source.indexOf("function switchView(", start);
+
   let continueSearch;
   const calls = [];
   const elements = {
@@ -264,7 +245,7 @@ test("an empty Docker selector page offers continuation and renders older permit
     "component-table": {innerHTML: "", insertAdjacentHTML(_, html) { this.innerHTML += html; }},
     "continue-docker-search": {addEventListener(_, fn) { continueSearch = fn; }},
   };
-  const context = vm.createContext({
+  const context = declarations.context({
     searchRequestSeq: 0, activeCustomSearchFormat: "docker", componentsCache: [],
     DEFAULT_SEARCH_FORMAT: "all", normalizeSearchFormat: value => value,
     normalizeCustomSearchFormat: value => value, searchHash: () => "#browse/search/docker",
@@ -277,7 +258,7 @@ test("an empty Docker selector page offers continuation and renders older permit
     },
     escapeHtml: String, lucideIcon: () => "", componentBrowsePath: () => "path",
   });
-  vm.runInContext(source.slice(start, end), context);
+  vm.runInContext(declarations("renderSearch"), context);
   await context.renderSearch("docker");
   assert.match(elements["component-table"].innerHTML, /Continue Docker search/);
   await continueSearch();
@@ -286,16 +267,13 @@ test("an empty Docker selector page offers continuation and renders older permit
   assert.equal(elements["component-total"].textContent, "1");
 });
 
-
 test("Docker repository URLs select HTTPS independently of the console scheme", () => {
-  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("function dockerRepositoryBaseUrl(");
-  const end = source.indexOf("async function fetchRepositories(", start);
+
   for (const protocol of ["http:", "https:"]) {
-    const context = vm.createContext({URL,
+    const context = declarations.context({URL,
       window: {location: {origin: `${protocol}//repo.example:8080`, protocol, hostname: "repo.example"}},
     });
-    vm.runInContext(source.slice(start, end), context);
+    vm.runInContext(declarations("dockerRepositoryBaseUrl"), context);
     for (const [docker, expected] of [
       [{httpsConnectorEnabled: true, httpsConnectorPort: 5443}, "https://repo.example:5443"],
       [{connectorEnabled: true, connectorPort: 5000}, "http://repo.example:5000"],

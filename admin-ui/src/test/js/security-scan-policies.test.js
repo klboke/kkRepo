@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function setup(confirm = true, response = { ok: true }) {
   const calls = [];
@@ -19,19 +17,9 @@ function setup(confirm = true, response = { ok: true }) {
     loadSecurityScanList: async key => calls.push(['reload', key]),
     formatSecurityScanValidity: () => '7 days',
   };
-  vm.createContext(context);
+  declarations.context(context);
   require("./authorization-fixture")(context);
-  for (const [start, end] of [
-    ['function escapeHtml(', 'function '],
-    ['async function responseErrorMessage(', 'async function saveBlobStore('],
-    ['function renderSecurityScanPolicies(', 'function renderSecurityScanWaivers('],
-    ['async function deleteSecurityScanPolicy(', 'function securityScanWaiverTargetLabel('],
-  ]) {
-    const begin = source.indexOf(start);
-    const finish = source.indexOf(end, begin + start.length);
-    assert.ok(begin >= 0 && finish > begin);
-    vm.runInContext(source.slice(begin, finish), context);
-  }
+  vm.runInContext(declarations("escapeHtml", "responseErrorMessage", "renderSecurityScanPolicies", "deleteSecurityScanPolicy"), context);
   return { context, calls, table };
 }
 
@@ -42,8 +30,8 @@ test('policy rows expose a delete action and escape stored names', () => {
   assert.match(table.innerHTML, /security-scan-policy-delete/);
   assert.match(table.innerHTML, /Delete this policy and all its revisions/);
   assert.doesNotMatch(table.innerHTML, /<img/);
-  const begin = source.indexOf('document.getElementById("security-scan-policy-table").addEventListener');
-  const handler = source.slice(begin, source.indexOf('\n});', begin) + 4);
+
+  const handler = declarations("bindScanPolicyTable");
   assert.match(handler, /deleteSecurityScanPolicy\(deleteButton.dataset.id, deleteButton\)/);
 });
 

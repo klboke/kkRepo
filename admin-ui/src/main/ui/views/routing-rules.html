@@ -1,0 +1,35 @@
+        <section class="view fixed-table-view" id="routing-rules-view">
+          <div class="page-heading"><span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span><h1>Routing Rules</h1><span class="heading-copy">Control which paths proxy repositories can serve</span></div>
+          <div class="action-bar action-bar-with-note">
+            <button class="create-button" id="routing-rule-create" type="button">Create rule</button>
+            <button class="create-button secondary" id="routing-rule-refresh" type="button">Refresh</button>
+            <label class="filter-box"><input id="routing-rule-filter" type="search" placeholder="Filter routing rules" aria-label="Filter routing rules"></label>
+            <p class="form-note action-bar-note">Assign a rule in a proxy repository’s settings. Rules also apply to cached content and requests through groups.</p>
+          </div>
+          <p id="routing-rule-status" role="status" aria-live="polite"></p>
+          <div class="nx-table-frame fixed-table-frame"><table class="nx-table"><thead><tr><th>Name</th><th>Mode</th><th>Matchers</th><th>Description</th><th class="actions-column">Actions</th></tr></thead><tbody id="routing-rule-table"></tbody></table></div>
+          <div class="form-modal" id="routing-rule-form-modal" data-form-id="routing-rule-form" role="dialog" aria-modal="true" aria-labelledby="routing-rule-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="routing-rule-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="routing-rule-form" type="button" aria-label="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form" id="routing-rule-form" hidden>
+                <div class="form-title" id="routing-rule-form-title">Create routing rule</div>
+                <div class="form-grid">
+                  <label><span>Name <span class="required-mark">*</span></span><input id="routing-rule-name" required maxlength="200" pattern="[a-zA-Z0-9\-][a-zA-Z0-9_.\-]*"></label>
+                  <label><span>Mode</span><select id="routing-rule-mode"><option value="BLOCK">Block matching paths</option><option value="ALLOW">Allow only matching paths</option></select></label>
+                  <label class="full-width"><span>Description</span><input id="routing-rule-description" maxlength="1024"></label>
+                  <label class="full-width"><span>Matchers <span class="required-mark">*</span></span><textarea id="routing-rule-matchers" rows="5" required spellcheck="false" placeholder="/com/company/.*" aria-describedby="routing-rule-syntax"></textarea></label>
+                </div>
+                <p class="form-note" id="routing-rule-syntax">One Java regular expression per line. Match the entire path, starting with /. Any matching expression activates the rule. Query parameters are included.</p>
+                <p class="form-note" id="routing-rule-used-by"></p>
+                <fieldset class="form-grid"><legend>Test a path</legend>
+                  <label class="full-width"><span>Repository-relative path</span><input id="routing-rule-test-path" placeholder="/com/company/app/1.0/app-1.0.jar" spellcheck="false"></label>
+                  <div class="form-actions full-width"><button class="create-button secondary" id="routing-rule-preview" type="button">Test path</button></div>
+                </fieldset>
+                <p id="routing-rule-preview-status" role="status" aria-live="polite"></p>
+                <p id="routing-rule-error" role="alert"></p>
+                <div class="form-actions"><button class="create-button" id="routing-rule-save" type="submit">Save rule</button><button class="create-button secondary" type="button" data-modal-dismiss="routing-rule-form">Cancel</button></div>
+              </form>
+            </div>
+          </div>
+        </section>

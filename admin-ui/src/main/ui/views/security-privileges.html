@@ -1,0 +1,38 @@
+        <section class="view fixed-table-view" id="security-privileges-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-key" aria-hidden="true"></span></span>
+            <h1>Privileges</h1>
+            <span class="heading-copy">Manage Nexus-compatible wildcard and repository privileges</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="create-security-privilege-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create privilege</button>
+            <label class="filter-box"><span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span><input id="security-privilege-filter" type="search" placeholder="Filter"></label>
+          </div>
+          <div class="form-modal" id="security-privilege-form-modal" data-form-id="security-privilege-form" role="dialog" aria-modal="true" aria-labelledby="security-privilege-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-privilege-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="security-privilege-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+          <form class="blobstore-form modal-form" id="security-privilege-form" hidden novalidate>
+            <div class="form-title" id="security-privilege-form-title">Create privilege</div>
+            <div class="form-grid">
+              <label><span>Privilege ID <span class="required-mark">*</span></span><input id="security-privilege-id" type="text" required></label>
+              <label><span>Name</span><input id="security-privilege-name" type="text"></label>
+              <label><span>Type</span><select id="security-privilege-type"><option value="wildcard">wildcard</option><option value="application">application</option><option value="repository-view">repository-view</option><option value="repository-admin">repository-admin</option><option value="repository-content-selector">repository-content-selector</option></select></label>
+              <label><span>Description</span><input id="security-privilege-description" type="text"></label>
+              <label class="checkbox-field"><input id="security-privilege-readonly" type="checkbox"><span>Read only</span></label>
+              <label class="full-width"><span>Properties JSON</span><textarea id="security-privilege-properties" rows="5" spellcheck="false">{"pattern":"nexus:*"}</textarea></label>
+            </div>
+            <div class="form-actions">
+              <button class="create-button" id="save-security-privilege-button" type="button">Save privilege</button>
+              <button class="create-button secondary" id="cancel-security-privilege-button" type="button">Cancel</button>
+            </div>
+          </form>
+            </div>
+          </div>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Privilege ID</th><th>Type</th><th>Name</th><th>Permission</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="security-privilege-table"></tbody>
+            </table>
+          </div>
+        </section>

@@ -1,10 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function form() {
   const elements = new Map();
@@ -34,10 +31,23 @@ function form() {
     isAzureBlobStore: store => (store.engine || '').startsWith('azure'),
     lowerOrEmpty: value => (value || '').toLowerCase(),
   };
-  vm.createContext(context);
+  declarations.context(context);
   vm.runInContext(`let blobStoreFormMode = 'create'; let editingBlobStoreId = null; let blobStores = [];\n`
-    + source.slice(source.indexOf('const blobStoreS3RequiredFields'), source.indexOf('const repositoryRequiredFields'))
-    + source.slice(source.indexOf('function blobStoreFormPayload()'), source.indexOf('function hideBlobStoreForm()')), context);
+    + declarations(
+      "blobStoreS3RequiredFields", "blobStoreFileRequiredFields", "blobStoreAzureRequiredFields",
+      "blobStoreAzureFields", "blobStoreS3DefaultEndpoint", "blobStoreFormFields",
+    )
+    + declarations(
+      "blobStoreFormPayload", "azureBlobStoreFormPayload", "blobStoreAzureCredentialType",
+      "azureIdentityFieldsVisible", "azureWorkloadFieldsVisible", "azureTokenFileVisible",
+      "blobStoreCredentialSource", "activeBlobStoreRequiredFields", "activeAzureBlobStoreRequiredFields",
+      "azureSecretRequired", "refreshBlobStoreRequiredMarkers", "validateBlobStoreForm",
+      "clearBlobStoreFieldError", "clearBlobStoreFormErrors", "setBlobStoreFormTitle",
+      "setSecretFieldMode", "setAccessFieldMode", "blobStoreFormModeControls",
+      "bindBlobStoreFormModeControls", "refreshBlobStoreEngineControls",
+      "refreshBlobStoreEndpointDefault", "setBlobStoreFieldLabel", "showCreateBlobStoreForm",
+      "showEditBlobStoreForm", "blobStoreInitialFocusField", "normalizeBlobStoreEngine",
+    ), context);
   context.showCreateBlobStoreForm();
   return { context, element, toasts, run: script => vm.runInContext(script, context) };
 }

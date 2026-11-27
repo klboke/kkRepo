@@ -1,14 +1,12 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const test = require("node:test");
 const vm = require("node:vm");
-
-const source = readFileSync(require.resolve("../../main/resources/META-INF/resources/admin/assets/admin.js"), "utf8");
 
 test("user badges distinguish active and disabled statuses regardless of case", () => {
   const table = { innerHTML: "" };
   const statuses = ["active", "ACTIVE", "Active", "disabled", "DISABLED", "changepassword", null];
-  const context = vm.createContext({
+  const context = declarations.context({
     securityUserRoleFilter: "",
     securityUsers: statuses.map((status, index) => ({ source: "Local", userId: `user-${index}`, status })),
     renderSecurityUserSourceFilter() {},
@@ -19,7 +17,7 @@ test("user badges distinguish active and disabled statuses regardless of case", 
     document: { getElementById: (id) => id === "security-user-table" ? table : null }
   });
 
-  const render = source.slice(source.indexOf("function securityRoleBadges("), source.indexOf("function showSecurityUserForm("));
+  const render = declarations("securityRoleBadges", "renderSecurityUsers");
   vm.runInContext(render + "\nrenderSecurityUsers();", context);
 
   const badges = [...table.innerHTML.matchAll(/class="state-badge compact (\w+)">([^<]*)<\/span>/g)];
@@ -31,7 +29,7 @@ test("user badges distinguish active and disabled statuses regardless of case", 
 
 test("external roles are searchable and labelled with their assignment source", () => {
   const table = { innerHTML: "" };
-  const context = vm.createContext({
+  const context = declarations.context({
     securityUserRoleFilter: "",
     securityUsers: [
       { source: "OIDC", userId: "alice", status: "ACTIVE", roles: [], externalRoles: ["repo-reader"] },
@@ -45,7 +43,7 @@ test("external roles are searchable and labelled with their assignment source", 
     document: { getElementById: (id) => id === "security-user-table" ? table : null }
   });
 
-  const render = source.slice(source.indexOf("function securityRoleBadges("), source.indexOf("function showSecurityUserForm("));
+  const render = declarations("securityRoleBadges", "renderSecurityUsers");
   vm.runInContext(render + "\nrenderSecurityUsers();", context);
 
   assert.match(table.innerHTML, /repo-reader · OIDC/);

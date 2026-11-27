@@ -1,10 +1,9 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
-const proxySettings = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/proxy-settings.js'), 'utf8');
 
 function form(repo) {
   const elements = new Map();
@@ -30,16 +29,13 @@ function form(repo) {
     'refreshRepositoryBlobStoreLock', 'refreshRepositoryRemoteDefaults', 'updateRequiredMarkers',
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
     'openFormModal', 'setConanManifestSettings', 'loadConanStatus', 'loadAptStatus', 'loadAlpineStatus']) context[name] = () => {};
-  vm.createContext(context);
-  vm.runInContext(proxySettings, context);
+  declarations.context(context);
+  context.proxySettings = require("../../../../scripts/ui/module-fixture.cjs")("admin", "proxy-settings", context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
-  vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
-    source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);
+  vm.runInContext(declarations("MINIMUM_RELEASE_AGE_FORMATS", "proxyCommand", "proxyFormValues"), context);
   for (const name of ['refreshRepositoryRecipeControls', 'repositoryFormPayload',
     'setRepositoryFormDefaults', 'showEditRepositoryForm']) {
-    const start = source.indexOf(`function ${name}(`);
-    const end = source.indexOf('\nfunction ', start + 1);
-    vm.runInContext(source.slice(start, end), context);
+    vm.runInContext(declarations(name), context);
   }
   context.setRepositoryFormDefaults();
   element('repository-recipe').value = 'nuget-proxy';
@@ -98,7 +94,7 @@ test('repository edit round-trips legacy proxy types through the shared editor',
 });
 
 test('streaming explanation uses the shared accessible information popover', () => {
-  const html = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/index.html'), 'utf8');
+  const html = readFileSync(join(__dirname, '../../../target/generated-ui/META-INF/resources/admin/index.html'), 'utf8');
   const start = html.indexOf('id="repository-streaming-enabled"');
   const snippet = html.slice(start, html.indexOf('id="repository-auto-block"', start));
   assert.match(snippet, /class="field-help" tabindex="0"/);
@@ -118,7 +114,7 @@ test('only the repository override mode enables and sends custom proxy settings'
   assert.equal(context.repositoryFormPayload().proxy.outboundProxyMode, 'OVERRIDE');
   assert.equal(context.repositoryFormPayload().proxy.outboundProxyHost, 'egress.example.org');
   element('repository-outbound-proxy-mode').value = 'INHERIT';
-  context.window.KkProxySettings.refreshRepositoryForm();
+  context.proxySettings.refreshRepositoryForm();
   const inherited = context.repositoryFormPayload().proxy;
   assert.equal(inherited.outboundProxyMode, 'INHERIT');
   assert.equal(inherited.outboundProxyHost, undefined);

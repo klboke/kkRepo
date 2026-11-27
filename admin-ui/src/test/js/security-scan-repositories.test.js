@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function setup(repository, deploymentEnabled = true) {
   const table = { innerHTML: '', querySelectorAll: () => [] };
@@ -15,18 +13,13 @@ function setup(repository, deploymentEnabled = true) {
     hideFieldHelpPopover: () => { popover.hidden = true; },
     scheduleFieldHelpPopoverHide() {},
   };
-  vm.createContext(context);
-  for (const [start, end] of [
-    ['function escapeHtml(', 'function ',],
-    ['function renderSecurityScanRepositoryStatus(', 'function renderSecurityScanPolicies('],
-    ['function formatSecurityScanValidity(', 'function setSecurityScanResultValidity('],
-    ['function bindFieldHelpTrigger(', 'function bindFieldHelpTooltips('],
-  ]) {
-    const begin = source.indexOf(start);
-    const finish = source.indexOf(end, begin + start.length);
-    assert.ok(begin >= 0 && finish > begin, `Source section ${start}`);
-    vm.runInContext(source.slice(begin, finish), context);
-  }
+  declarations.context(context);
+  vm.runInContext(declarations(
+    "escapeHtml", "renderSecurityScanRepositoryStatus", "renderSecurityScanSetting",
+    "renderSecurityScanResultValidity", "renderSecurityScanExceptionHandling",
+    "renderSecurityScanRepositories", "formatSecurityScanValidity", "setSecurityScanDurationSelect",
+    "bindFieldHelpTrigger",
+  ), context);
   return { context, table, popover };
 }
 const repository = overrides => ({

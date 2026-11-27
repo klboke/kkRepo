@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function render(task) {
   const table = { innerHTML: '' };
@@ -14,12 +12,12 @@ function render(task) {
     securityScanTone: () => '',
     formatDateTime: () => '-'
   };
-  vm.createContext(context);
-  const escapeStart = source.indexOf('function escapeHtml(');
+  declarations.context(context);
+
   vm.runInContext(
-    source.slice(escapeStart, source.indexOf('\n}', escapeStart) + 2)
-    + source.slice(source.indexOf('function renderSecurityScanTasks('), source.indexOf('function renderSecurityScanFindingRepositories('))
-    + source.slice(source.indexOf('function securityScanFindingArtifactBrowseUrl('), source.indexOf('function securityScanExternalHttpUrl(')), context);
+    declarations("escapeHtml")
+    + declarations("renderSecurityScanTasks", "renderSecurityScanTaskAsset")
+    + declarations("securityScanFindingArtifactBrowseUrl"), context);
   context.renderSecurityScanTasks();
   return table.innerHTML;
 }

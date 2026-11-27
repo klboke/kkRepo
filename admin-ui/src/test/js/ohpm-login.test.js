@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const crypto = require("node:crypto");
-const modulePath = "../../main/resources/META-INF/resources/admin/assets/ohpm-login.js";
+const modulePath = "../../main/ui/js/ohpm-login.js";
 const { command } = require(modulePath);
 
 test("public key registration preserves the user identity and explicitly selected status", () => {
@@ -23,8 +23,6 @@ test("private keys and incomplete owners are rejected before submission", () => 
 });
 
 async function withPage(run, initial = [], configurationEnabled = true) {
-  delete require.cache[require.resolve(modulePath)];
-  const { load } = require(modulePath);
   const elements = new Map();
   for (const name of ["view", "form", "source", "user", "key", "configuration", "rows", "empty",
     "create", "form-status", "page-label", "page-size", "notice", "availability", "timing", "table", "pagination", "form-title", "page", "status", "refresh", "previous", "next", "mode", "save", "cancel"]) {
@@ -68,6 +66,12 @@ async function withPage(run, initial = [], configurationEnabled = true) {
       : { enabled: state.configurationEnabled, tokenTtlSeconds: 300, timestampToleranceSeconds: 300 } };
   };
   try {
+    const { load } = require("../../../../scripts/ui/module-fixture.cjs")("admin", "ohpm-login", {
+      document: global.document, fetch: global.fetch, escapeHtml: global.escapeHtml,
+      responseErrorMessage: global.responseErrorMessage, kkrepoConfirmDelete: global.kkrepoConfirmDelete,
+      openFormModal: global.openFormModal, closeFormModal: global.closeFormModal,
+      bindFormModalDismiss: global.bindFormModalDismiss, userPicker: global.KkUserPicker,
+    });
     await load();
     const click = (action) => elements.get("rows").events.click({
       target: { closest: () => ({ dataset: { keyAction: action, index: "0" } }) }
@@ -198,7 +202,6 @@ test("cancelling rotation keeps the PEM and never submits a mutation", async () 
   }, [binding]);
 });
 
-
 test("deleting the last key on a later page returns to the first page", async () => {
   const records = Array.from({ length: 11 }, (_, index) => ({ ...binding,
     userId: `publisher-${index}`, publishId: `key-${index}` }));
@@ -213,7 +216,6 @@ test("deleting the last key on a later page returns to the first page", async ()
     assert.equal(elements.get("status").textContent, "Signing key deleted.");
   }, records);
 });
-
 
 test("page size changes reset the page and exact full pages disable Next", async () => {
   const records = Array.from({ length: 100 }, (_, index) => ({ ...binding, publishId: `key-${index}` }));
@@ -281,7 +283,6 @@ test("the shared modal keeps failed submissions open and dismissal clears drafts
     assert.equal(elements.get("status").textContent, "Public key saved.");
   });
 });
-
 
 test("disabled signed login blocks creation, rotation and enabling while allowing revocation", async () => {
   await withPage(async ({ elements, state, calls, click, submit, load }) => {

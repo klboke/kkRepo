@@ -1,21 +1,12 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const source = readFileSync(resolve(__dirname,
-  "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-
-function extractFunction(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, name);
-  const end = source.indexOf("\n}\n", start);
-  return source.slice(start, end + 3);
-}
+const extractFunction = name => declarations(name);
 
 function render(downloadUrl) {
-  const context = vm.createContext({
+  const context = declarations.context({
     lucideIcon: () => "<svg></svg>",
   });
   vm.runInContext([

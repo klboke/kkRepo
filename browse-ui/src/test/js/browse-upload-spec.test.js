@@ -1,6 +1,5 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
-const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
@@ -31,38 +30,23 @@ function field(name, type, optional = false, description = "") {
 }
 
 function loadUploadHelpers(documentRef = {}) {
-  const source = readFileSync(resolve(
-    __dirname,
-    "../../main/resources/META-INF/resources/browse/assets/browse.js",
-  ), "utf8");
-  const selectedStart = source.indexOf("function selectedUploadSpec");
-  const selectedEnd = source.indexOf("function renderUploadFields", selectedStart);
-  const renderStart = source.indexOf("function uploadSpecFieldLabel");
-  const renderEnd = source.indexOf("function updateTerraformUploadKind", renderStart);
-  const pathsStart = source.indexOf("function computedUploadPaths");
-  const pathsEnd = source.indexOf("function updateUploadPath", pathsStart);
-  const formStart = source.indexOf("function buildUploadForm");
-  const formEnd = source.indexOf("async function uploadError", formStart);
-  for (const boundary of [
-    selectedStart, selectedEnd, renderStart, renderEnd,
-    pathsStart, pathsEnd, formStart, formEnd,
-  ]) {
-    assert.notEqual(boundary, -1, "browse upload helper boundary should exist");
-  }
 
-  const context = vm.createContext({
+  const context = declarations.context({
     CSS: { escape: (value) => value },
     document: documentRef,
     escapeHtml: (value) => String(value),
     selectedUploadRepository: () => documentRef.selectedRepository,
   });
   vm.runInContext(`
-    let uploadAssetCount = 1;
-    let uploadSpecsCache = new Map();
-    ${source.slice(selectedStart, selectedEnd)}
-    ${source.slice(renderStart, renderEnd)}
-    ${source.slice(pathsStart, pathsEnd)}
-    ${source.slice(formStart, formEnd)}
+    var uploadAssetCount = 1;
+    var uploadSpecsCache = new Map();
+    ${declarations("selectedUploadSpec")}
+    ${declarations(
+      "uploadSpecFieldLabel", "uploadSpecComponentField", "uploadSpecAssetRow", "renderUploadSpecFields",
+      "bindUploadSpecAssetRow", "syncUploadSpecRemoveButtons",
+    )}
+    ${declarations("computedUploadPaths")}
+    ${declarations("buildUploadForm")}
     globalThis.setUploadSpecs = (specs) => { uploadSpecsCache = new Map(specs); };
     globalThis.renderUploadSpecFields = renderUploadSpecFields;
     globalThis.computedUploadPaths = computedUploadPaths;

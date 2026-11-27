@@ -1,9 +1,7 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("admin");
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
 function form(defaults = { manifestMaxEntries: 50000, manifestMaxBytes: 16777216 }) {
   const elements = new Map();
@@ -23,17 +21,16 @@ function form(defaults = { manifestMaxEntries: 50000, manifestMaxBytes: 16777216
     textInputValue: id => element(id).value.trim(),
     responseErrorMessage: async () => 'unavailable',
   };
-  vm.createContext(context);
+  declarations.context(context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
-  vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
-    source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);
-  vm.runInContext(source.slice(source.indexOf('let conanManifestDefaults'), source.indexOf('let blobStores')), context);
+  vm.runInContext(declarations("MINIMUM_RELEASE_AGE_FORMATS", "proxyCommand", "proxyFormValues"), context);
+  vm.runInContext(declarations(
+    "conanManifestDefaults", "repositoryConanOverrides", "repositoryConanSavedOverrides",
+    "conanManifestFields",
+  ), context);
   for (const name of ['loadConanManifestDefaults', 'setConanManifestSettings', 'updateConanManifestSetting',
     'updateConanManifestHelp', 'repositoryFormPayload']) {
-    const start = source.search(new RegExp(`(?:async )?function ${name}\\(`));
-    const rest = source.slice(start);
-    const end = rest.slice(1).search(/\n(?:async )?function /) + 1;
-    vm.runInContext(rest.slice(0, end), context);
+    vm.runInContext(declarations(name), context);
   }
   context.defaults = defaults;
   vm.runInContext('conanManifestDefaults = defaults', context);

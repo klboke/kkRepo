@@ -1,0 +1,282 @@
+
+.member-row.drop-target-above {
+  box-shadow: inset 0 2px 0 0 var(--active);
+}
+
+.member-row.drop-target-below {
+  box-shadow: inset 0 -2px 0 0 var(--active);
+}
+
+.summary-grid > div,
+.code-panel,
+.migration-error-panel,
+code {
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #f8faf8;
+}
+
+.summary-grid span {
+  color: var(--muted);
+}
+
+.summary-grid strong {
+  color: var(--ink-1);
+}
+
+.migration-error-panel {
+  border-color: var(--danger-line);
+  background: var(--danger-bg);
+}
+
+.code-panel,
+code {
+  color: #1c3934;
+}
+
+.nx-table-frame {
+  margin: 0 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.nx-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.nx-table th,
+.nx-table td {
+  height: 44px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.nx-table th {
+  height: 42px;
+  background: var(--header);
+  color: var(--table-head-ink);
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.nx-table tbody tr:nth-child(odd),
+.nx-table tbody tr:nth-child(even) {
+  background: var(--row);
+}
+
+.nx-table tbody tr:hover {
+  background: var(--row-hover);
+}
+
+.nx-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.repo-sort-button:hover,
+.repo-sort-button.is-active {
+  color: var(--active);
+}
+
+.repo-icon {
+  color: #40504b;
+}
+
+.repo-icon.group {
+  color: #b77a22;
+}
+
+.repo-icon.proxy {
+  color: #596d8f;
+}
+
+.state-badge {
+  border-radius: 8px;
+}
+
+.state-badge.ok {
+  background: #e1f1eb;
+  color: var(--success);
+}
+
+.state-badge.warn {
+  background: var(--warning-bg);
+  color: #805b16;
+}
+
+.state-badge.checking {
+  background: var(--info-bg);
+  color: #40577d;
+}
+
+.state-badge.bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.health-score {
+  color: #364844;
+}
+
+.health-muted {
+  color: #9ea9a5;
+}
+
+@media (max-width: 980px) {
+  .nx-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    height: auto;
+    overflow: visible;
+  }
+
+  .nx-topbar {
+    height: auto;
+    min-height: 56px;
+  }
+
+  .product {
+    width: auto;
+    min-width: min(100%, 260px);
+  }
+
+  .side-nav {
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    overflow-x: auto;
+  }
+
+  .nx-sidebar {
+    overflow-y: visible;
+  }
+
+  .side-group-items:not([hidden]) {
+    display: contents;
+  }
+
+  .side-item {
+    padding-left: 26px;
+  }
+
+  .page-heading,
+  .nx-table-frame,
+  .blobstore-form,
+  .migration-result,
+  .audit-filter-bar,
+  .pagination-bar,
+  .placeholder {
+    margin-right: 16px;
+    margin-left: 16px;
+  }
+
+  .action-bar {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .audit-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audit-query {
+    grid-column: 1 / -1;
+  }
+
+  .pagination-bar {
+    flex-wrap: wrap;
+  }
+
+  .pagination-size {
+    margin-left: 0;
+  }
+
+  .form-modal {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .form-modal-panel {
+    max-height: calc(100vh - 24px);
+  }
+}
+
+@media (max-width: 760px) {
+  .product {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .product-copy {
+    min-width: 0;
+  }
+
+  .workspace-tabs {
+    order: 3;
+    width: 100%;
+    margin: 8px 0 0;
+  }
+
+  .workspace-tab {
+    flex: 1;
+  }
+
+  .form-modal {
+    padding: 0;
+  }
+
+  .form-modal-panel {
+    width: 100%;
+    max-height: 100vh;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+}
+
+/* Shared Lucide sizing keeps navigation and icon buttons visually aligned. */
+.side-item {
+  gap: 10px;
+}
+
+.side-item-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.side-item:hover .side-item-icon,
+.side-item.is-active .side-item-icon {
+  color: currentColor;
+}
+
+.side-group-caret,
+.user-menu-caret,
+.recipe-combobox-caret {
+  width: 12px;
+  height: 12px;
+}
+
+.heading-icon > .lucide-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.filter-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.create-button,
+.row-action,
+.member-action,
+.form-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

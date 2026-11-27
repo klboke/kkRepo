@@ -1,20 +1,16 @@
+const declarations = require("../../../../scripts/ui/test-fixture.cjs")("browse");
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-const resources = resolve(__dirname, "../../main/resources/META-INF/resources/browse");
-const source = readFileSync(resolve(resources, "assets/browse.js"), "utf8");
+const resources = resolve(__dirname, "../../../target/generated-ui/META-INF/resources/browse");
+
 const safeReturnToSource = readFileSync(resolve(__dirname,
   "../../../../admin-ui/src/main/resources/META-INF/resources/login/assets/safe-return-to.js"), "utf8");
 
-function extractFunction(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, name);
-  const end = source.indexOf("\n}\n", start);
-  return source.slice(source.slice(start - 6, start) === "async " ? start - 6 : start, end + 3);
-}
+const extractFunction = name => declarations(name);
 
 function deferred() {
   let resolve, reject;
@@ -35,7 +31,7 @@ function start(hash) {
     history.push([kind, target]);
     location.href = new URL(target, location).href;
   };
-  const context = vm.createContext({
+  const context = declarations.context({
     URL, URLSearchParams,
     APP_HASH_PREFIX: "browse", BROWSE_HASH: "browse/browse",
     DEFAULT_SEARCH_FORMAT: "maven2", CUSTOM_SEARCH_FORMAT: "custom", ALL_SEARCH_FORMAT: "all",
@@ -203,7 +199,7 @@ test("a duplicate My Token request clears the secret and points to Reset", async
   const statuses = [];
   const busyStates = [];
   let refreshed = false;
-  const context = vm.createContext({
+  const context = declarations.context({
     currentSession: { userId: "owner" },
     currentApiKeysLoaded: true,
     latestGeneratedApiToken: fields["my-token-value"].value,

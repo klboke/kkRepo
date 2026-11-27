@@ -27,12 +27,14 @@
       <resource>
         <directory>src/main/resources</directory>
         <filtering>false</filtering>
-        <excludes>
-          <exclude>META-INF/resources/browse/index.html</exclude>
-        </excludes>
       </resource>
       <resource>
-        <directory>src/main/resources</directory>
+        <directory>${project.build.directory}/generated-ui</directory>
+        <filtering>false</filtering>
+        <excludes><exclude>**/index.html</exclude></excludes>
+      </resource>
+      <resource>
+        <directory>${project.build.directory}/generated-ui</directory>
         <filtering>true</filtering>
         <includes>
           <include>META-INF/resources/browse/index.html</include>
@@ -40,6 +42,25 @@
       </resource>
     </resources>
     <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.7.0</version>
+        <executions>
+          <execution>
+            <id>assemble-ui</id>
+            <phase>generate-resources</phase>
+            <goals><goal>exec</goal></goals>
+            <configuration>
+              <executable>node</executable>
+              <arguments>
+                <argument>${project.basedir}/../scripts/ui/build.mjs</argument>
+                <argument>browse</argument>
+              </arguments>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <artifactId>maven-resources-plugin</artifactId>
         <version>3.5.0</version>

@@ -34,7 +34,7 @@ class AdminProxyRedirectHostsContractTest {
     assertTrue(javascript.contains("allowedRedirectHosts,"));
     assertTrue(javascript.contains(
         "document.getElementById(\"repository-allowed-redirect-hosts\").value = \"\";"));
-    assertTrue(javascript.contains("repo.proxy.allowedRedirectHosts.join(\", \")"));
+    assertTrue(javascript.contains("proxy.allowedRedirectHosts.join(\", \")"));
     assertFalse(index.contains("repository-redirect-policy"));
   }
 
