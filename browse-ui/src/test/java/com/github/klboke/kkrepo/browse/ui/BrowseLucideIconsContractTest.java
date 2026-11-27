@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 class BrowseLucideIconsContractTest {
   private static final List<String> REQUIRED_ICONS = List.of(
       "home", "search", "library", "upload", "key-round", "user-round", "list-filter", "split", "braces",
-      "boxes", "cloud-download", "package", "folder", "archive", "file-code",
+      "arrow-left-right", "import", "boxes", "cloud-download", "package", "folder", "archive", "file-code",
       "files", "file", "file-archive", "file-java-archive", "file-apk", "file-box", "file-json", "file-text",
       "file-key", "file-check", "binary", "layers", "arrow-up-down", "copy", "check", "download", "x",
       "octagon-alert", "triangle-alert", "circle-alert", "circle-help", "external-link");

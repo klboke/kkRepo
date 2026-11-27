@@ -167,10 +167,10 @@ try {
   await expect(repositoryGroup).toHaveCSS("outline-style", "solid");
   await repositoryGroup.press("Enter");
   await expect(currentChild).toBeVisible();
-  const repositoryIcons = await page.locator("#side-group-repository-items .side-item-icon")
-    .evaluateAll(icons => icons.map(icon => getComputedStyle(icon).maskImage));
-  assert.ok(repositoryIcons.length > 0 && !repositoryIcons.includes("none"));
-  assert.equal(new Set(repositoryIcons).size, repositoryIcons.length, "Each repository menu entry has a distinct icon");
+  const adminIcons = await page.locator("#workspace-navigation .side-item").evaluateAll(items =>
+    items.map(item => getComputedStyle(item.querySelector(".side-item-icon")).maskImage));
+  assert.ok(adminIcons.length > 0 && !adminIcons.includes("none"));
+  assert.equal(new Set(adminIcons).size, adminIcons.length, "Each Admin menu entry has a distinct icon");
   const filter = page.locator("#repository-filter");
   const filterFrame = page.locator(".filter-box").filter({ has: filter });
   await page.locator("#create-repository-button").focus();
@@ -231,10 +231,15 @@ try {
   for (const [hash, view] of [
     ["repository/cleanup/runs", "cleanup-policies"], ["security/artifact-scanning/tasks", "security-scanning"],
     ["repository/blobstores", "blobstores"], ["migration/repository-data", "repository-data-migration"],
-    ["system/ui-settings", "ui-settings"],
+    ["migration/ohpm", "ohpm-import"], ["system/ui-settings", "ui-settings"],
   ]) {
     await page.goto(origin + "/admin/#admin/" + hash);
     await expect(page.locator("#" + view + "-view")).toBeVisible();
+    if (hash.startsWith("migration/")) {
+      const menuIcon = page.locator(`.side-item[data-view="${view}"] .side-item-icon`);
+      const mask = await menuIcon.evaluate(icon => getComputedStyle(icon).maskImage);
+      await expect(page.locator("#" + view + "-view .heading-icon .lucide-icon")).toHaveCSS("mask-image", mask);
+    }
     if (view === "cleanup-policies") {
       await verifyPageAlignment(page.locator("#cleanup-policies-view"),
         [".cleanup-tabs", ".cleanup-tab-panel.is-active .nx-table-frame"], []);

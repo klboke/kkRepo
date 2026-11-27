@@ -54,6 +54,7 @@
 .icon-sliders-horizontal { --lucide-icon: url("./icons/sliders-horizontal.svg"); }
 .icon-database-backup { --lucide-icon: url("./icons/database-backup.svg"); }
 .icon-arrow-left-right { --lucide-icon: url("./icons/arrow-left-right.svg"); }
+.icon-import { --lucide-icon: url("./icons/import.svg"); }
 .icon-boxes { --lucide-icon: url("./icons/boxes.svg"); }
 .icon-cloud-download { --lucide-icon: url("./icons/cloud-download.svg"); }
 .icon-package { --lucide-icon: url("./icons/package.svg"); }
