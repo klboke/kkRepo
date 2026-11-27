@@ -160,7 +160,9 @@ try {
   }
   await page.setViewportSize({ width: 1024, height: 620 });
   await page.goto(origin + "/admin/#admin/system/download-offload");
-  await page.locator("#offload-enabled").check();
+  const offloadEnabled = page.locator("#offload-enabled");
+  await expect(offloadEnabled).toBeEnabled();
+  await offloadEnabled.check();
   const preset = page.locator("#offload-method-trigger");
   const options = page.locator("#offload-method-popover");
   await preset.click();
