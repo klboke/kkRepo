@@ -41,7 +41,7 @@ async function loadDockerOperations() {
   const transfer = document.getElementById("docker-transfer-summary");
   if (!summary || !table || !transfer) return;
   summary.innerHTML = card("Status", "Loading");
-  table.innerHTML = '<tr><td colspan="6" class="placeholder">Loading Docker connector runtime...</td></tr>';
+  table.innerHTML = '<tr><td colspan="6" class="empty-cell">Loading Docker connector runtime...</td></tr>';
   transfer.innerHTML = "";
   try {
     const response = await fetch("/internal/docker/connectors", {
@@ -85,7 +85,7 @@ function renderDockerOperations(payload) {
       <td><span class="state-badge compact ${item.active ? "ok" : "warn"}">${escapeHtml(item.state || "")}</span></td>
       <td>${item.active ? "Yes" : "No"}${item.tlsBundle ? `<br><code title="${escapeHtml(item.certificateFingerprint || "")}">${escapeHtml(item.tlsBundle)}</code>` : ""}</td>
     </tr>
-  `).join("") || '<tr><td colspan="6" class="placeholder">No Docker connector ports configured.</td></tr>';
+  `).join("") || '<tr><td colspan="6" class="empty-cell">No Docker connector ports configured.</td></tr>';
   const status = document.getElementById("docker-operations-status");
   status.textContent = connector.lastError ? `Last runtime error: ${connector.lastError}` : "";
   status.classList.toggle("error", Boolean(connector.lastError));
@@ -94,7 +94,7 @@ function renderDockerOperations(payload) {
 function renderDockerOperationsError(message) {
   document.getElementById("docker-connector-summary").innerHTML = card("Status", "Failed");
   document.getElementById("docker-connector-table").innerHTML =
-      `<tr><td colspan="6" class="placeholder">${escapeHtml(message || "Docker operations request failed.")}</td></tr>`;
+      `<tr><td colspan="6" class="empty-cell">${escapeHtml(message || "Docker operations request failed.")}</td></tr>`;
   document.getElementById("docker-transfer-summary").innerHTML = "";
   const status = document.getElementById("docker-operations-status");
   status.textContent = message || "";

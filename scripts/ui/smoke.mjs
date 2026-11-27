@@ -245,6 +245,16 @@ try {
         [".cleanup-tabs", ".cleanup-tab-panel.is-active .nx-table-frame"], []);
     }
   }
+  await page.goto(origin + "/admin/#admin/repository/docker");
+  const dockerView = page.locator("#docker-registry-view");
+  await expect(dockerView.locator("#docker-transfer-summary > div")).toHaveCount(4);
+  for (const width of [1920, 1440, 1024, 820, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await verifyPageAlignment(dockerView, [
+      ".ops-panel:first-child .ops-panel-head", "#docker-connector-summary", ".nx-table-frame",
+      ".ops-panel:last-child .ops-panel-head", "#docker-transfer-summary", "#docker-operations-status",
+    ], ["#docker-connectors-refresh-button"]);
+  }
   await page.setViewportSize({ width: 1024, height: 620 });
   await page.goto(origin + "/admin/#admin/system/download-offload");
   const offloadEnabled = page.locator("#offload-enabled");

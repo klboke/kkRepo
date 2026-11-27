@@ -109,6 +109,7 @@ select {
 
 .docker-ops-layout {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 0 0 24px;
 }
@@ -116,6 +117,7 @@ select {
 .ops-panel {
   border-top: 1px solid var(--line);
   background: #ffffff;
+  overflow-wrap: anywhere;
 }
 
 .ops-panel-head {
@@ -126,12 +128,16 @@ select {
   padding: 9px 10px;
 }
 
-.compact-summary {
-  margin: 10px;
+.ops-panel .summary-grid > div {
+  padding-inline: 10px;
 }
 
-.docker-connector-table {
-  min-width: 980px;
+.ops-panel .docker-connector-table {
+  min-width: 0;
+}
+
+.ops-panel .docker-connector-table th {
+  white-space: normal;
 }
 
 .ops-status {
@@ -142,6 +148,10 @@ select {
 
 .ops-status.error {
   color: var(--danger);
+}
+
+.ops-panel > .ops-status {
+  margin-inline: 0;
 }
 
 .migration-progress-panel {
