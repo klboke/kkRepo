@@ -164,6 +164,11 @@
 }
 :root[data-theme] .workspace-tabs .workspace-tab.is-active { background: var(--brand-strong); color: white; }
 .navigation-toggle { display: none; }
+@media (min-width: 761px) and (max-width: 980px) {
+  .nx-shell .nx-topbar { height: auto; flex-wrap: wrap; }
+  .nx-topbar .product { min-width: 0; }
+  .nx-topbar .global-component-search { min-width: 0; flex: 1 1 160px; }
+}
 @media (max-width: 760px) {
   .nx-shell { grid-template: auto minmax(0,1fr) / minmax(0,1fr); height: 100dvh; min-height: 0; overflow: hidden; }
   .nx-shell .nx-topbar {

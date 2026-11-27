@@ -92,6 +92,10 @@ try {
   await page.goto(origin + "/browse/");
   await expect(page.locator("#welcome-view")).toBeVisible();
   await page.locator('[aria-controls="search-subnav"]').click();
+  const header = await page.locator(".nx-topbar").boundingBox();
+  const signIn = await page.locator(".nx-topbar .account-login").boundingBox();
+  assert.ok(signIn && signIn.y + signIn.height <= header.y + header.height,
+    "The tablet header contains the complete sign-in button");
   await page.locator('[data-search-format="maven2"]').click();
   await expect(page.locator("#search-view")).toBeVisible();
   await login(page, username, password, adminRoute);
