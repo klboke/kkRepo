@@ -460,6 +460,27 @@ Asset 列同时展示仓库浏览路径和内部 asset ID。点击路径可在 R
 - 已全部覆盖时按钮变为不可点击的 **waived**；只覆盖部分目标时显示
   **waive remaining**。
 
+工具栏选项可与搜索和 **Current findings** 组合使用，作用于全部可见 finding，而不仅是当前页：
+
+- **Hide waived**：当有效且已审批的豁免覆盖 finding 的全部可见仓库制品时隐藏该 finding。
+  部分豁免的 finding 仍会显示；已过期的豁免不会隐藏任何内容，绑定到仓库当前未使用的策略修订的豁免也不会。
+- **Group by package**：按存在漏洞的 package 和 installed version 分组。
+- **Group by artifact**：按仓库制品分组，制品标识优先使用组件坐标（例如
+  `groupId:artifactId`），其次是 Docker 镜像名，最后是 asset 路径。展开制品后按制品版本分组
+  （Docker 镜像使用 manifest digest）；同时开启 **Group by package** 时，制品展开后改为按
+  package 和 installed version 分组，并合并该制品的所有版本。
+
+分组只覆盖当前 finding。开启任一分组会同时开启 **Current findings**；关闭 **Current findings**
+会回到未分组列表，历史 finding 仍可在该列表中查看。
+
+分组按最高 severity 降序排列，并展示各 severity 数量以及 finding、advisory、制品数量。展开分组会
+分页加载其中的 finding；搜索、切换过滤条件或创建豁免后，已展开的分组会保持展开。开启
+**Hide waived** 时，制品分组只排除已被豁免的制品，因此同一 finding 仍可能出现在其他制品下。
+
+![按制品及制品版本分组，并隐藏已豁免的 finding](../img/artifact-scanning/findings-grouped-by-artifact.png)
+
+![按 package 和 installed version 分组，并展开其中一个 package](../img/artifact-scanning/findings-grouped-by-package.png)
+
 Finding 表示 scanner 数据库在某次 run 中的匹配结果。`0 findings` 只有在 run
 完整、scanner 数据库有效且目标适用时才可以解释为“当前未匹配到已知漏洞”。
 
@@ -513,6 +534,30 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
 
 同一个仓库制品已经被有效 waiver 覆盖时，服务端会拒绝重复创建，而不只依赖前端按钮
 置灰。
+
+#### Package waivers
+
+开启 **Group by package** 后，package 行上的 **waive package** 会为该 package 的这个精确版本
+豁免所有 advisory，覆盖所选范围内的全部制品，包括以后构建的制品。适用于无法升级的代码，例如
+被 shade 进第三方 jar 的依赖库。
+
+1. 选择范围：包含该 package 且由你管理的仓库，或 **All repositories**（需要
+   `nexus:security-scanning:update`）。
+2. 确认 package URL。豁免只匹配这个精确的 package URL，同一依赖库的其他版本仍会报告。
+   没有 package URL 的 finding 仍需逐条豁免。
+3. 选择到期时间（默认 90 天）并填写 Reason。
+4. 查看将被替换的已有豁免：该范围内通过 package selector 或 finding 关联到此 package URL
+   的全部豁免，无论有效还是已过期。你无权浏览的仓库中的豁免不会列出，也不会被替换。
+5. 点击 **Waive package**。存在会被替换的豁免时，会弹出确认框询问是否全部删除：**Yes, replace**
+   在同一事务中删除这些豁免并创建 package 豁免；**No** 取消操作，不做任何修改。
+
+![Package 豁免对话框及将被替换的豁免](../img/artifact-scanning/package-waiver-dialog.png)
+
+![替换单独豁免前的确认框](../img/artifact-scanning/package-waiver-confirm.png)
+
+替换已有豁免还需要 `nexus:security-scanning-waivers:delete` 权限，以及被替换豁免所在仓库的
+管理权限。如果对话框打开期间其他管理员修改了该 package 的豁免，请求会被拒绝并刷新列表，
+需要重新确认。每个被替换和新建的豁免都会像单条豁免变更一样记录审计日志。
 
 ## 常用配置
 

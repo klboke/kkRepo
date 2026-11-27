@@ -244,6 +244,45 @@ class OssNativeBlobStorageTest {
     }
   }
 
+  @Test
+  void aFileBelowTheMultipartThresholdIsUploadedInOneRequest() throws Exception {
+    OSSClient client = mock(OSSClient.class);
+    OssNativeBlobStorage storage = new OssNativeBlobStorage(client, config(64 * 1024 * 1024L));
+    Path file = Files.writeString(tempDir.resolve("small.bin"), "payload");
+    try {
+      BlobReference reference = storage.putFile("repo", "path/small.bin", file, "sha");
+
+      assertEquals(7, reference.size());
+      verify(client).putObject(any(PutObjectRequest.class));
+    } finally {
+      storage.close();
+    }
+  }
+
+  @Test
+  void aFailedMultipartFileUploadIsAbortedAndTheAbortIsBestEffort() throws Exception {
+    OSSClient client = mock(OSSClient.class);
+    var initiated = mock(InitiateMultipartUploadResult.class);
+    var handle = mock(InitiateMultipartUpload.class);
+    when(handle.uploadId()).thenReturn("upload-1");
+    when(initiated.initiateMultipartUpload()).thenReturn(handle);
+    when(client.initiateMultipartUpload(any(InitiateMultipartUploadRequest.class))).thenReturn(initiated);
+    when(client.uploadPart(any(UploadPartRequest.class))).thenThrow(new IllegalStateException("part failed"));
+    when(client.abortMultipartUpload(any(AbortMultipartUploadRequest.class)))
+        .thenThrow(new IllegalStateException("abort failed too"));
+    OssNativeBlobStorage storage = new OssNativeBlobStorage(client, config(1));
+    Path file = tempDir.resolve("large.bin");
+    Files.write(file, new byte[6 * 1024 * 1024]);
+    try {
+      assertThrows(RuntimeException.class, () -> storage.putFile("repo", "path/large.bin", file, "sha"));
+
+      verify(client).abortMultipartUpload(any(AbortMultipartUploadRequest.class));
+      verify(client, never()).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
+    } finally {
+      storage.close();
+    }
+  }
+
   private static S3BlobStoreConfig config(long multipartThreshold) {
     return S3BlobStoreConfig.of(
         1,

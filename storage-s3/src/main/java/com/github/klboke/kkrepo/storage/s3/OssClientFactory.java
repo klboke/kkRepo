@@ -5,12 +5,13 @@ import com.aliyun.sdk.service.oss2.credentials.StaticCredentialsProvider;
 import com.aliyun.sdk.service.oss2.transport.HttpClientOptions;
 import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClient;
 import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClientBuilder;
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.Set;
+import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -24,10 +25,10 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class OssClientFactory {
+  private static final Logger log = LoggerFactory.getLogger(OssClientFactory.class);
+
   private final OutboundTlsTrust tlsTrust;
-  private final LocalCache<Long, CachedClient> cache = LocalCacheFactory.standard()
-      .<Long, CachedClient>builder("oss-clients")
-      .build();
+  private final ClientCache<OSSClient> clients;
 
   public OssClientFactory() {
     this(OutboundTlsTrust.defaults());
@@ -35,41 +36,41 @@ public class OssClientFactory {
 
   @Autowired
   public OssClientFactory(OutboundTlsTrust tlsTrust) {
+    this(tlsTrust, null, S3ClientFactory.CLOSE_GRACE);
+  }
+
+  /** Test seam: a custom client builder and close grace (zero closes unleased clients synchronously). */
+  OssClientFactory(
+      OutboundTlsTrust tlsTrust, Function<S3BlobStoreConfig, OSSClient> clientBuilder, Duration closeGrace) {
     this.tlsTrust = tlsTrust;
+    this.clients = new ClientCache<>(
+        "oss-clients", "OSS", log,
+        clientBuilder == null ? this::build : clientBuilder,
+        OssClientFactory::closeQuietly, S3ClientFactory.IDLE_EXPIRY, closeGrace);
   }
 
+  /** The client for this exact configuration, built on first use. */
   public OSSClient client(S3BlobStoreConfig config) {
-    String signature = config.signature();
-    CachedClient cached = cache.getIfPresent(config.id());
-    if (cached != null && cached.signature.equals(signature)) {
-      return cached.client;
-    }
-    return cache.asMap().compute(config.id(), (id, current) -> {
-      if (current != null && current.signature.equals(signature)) {
-        return current;
-      }
-      if (current != null) {
-        closeQuietly(current.client);
-      }
-      return new CachedClient(signature, build(config));
-    }).client;
+    return clients.client(config);
   }
 
+  /** A reference that always resolves the live client; see {@link S3ClientFactory#handle}. */
+  public ClientHandle<OSSClient> handle(S3BlobStoreConfig config) {
+    return clients.handle(config);
+  }
+
+  /** Drops every client of this store (deleted or reconfigured); the next use builds a fresh one. */
   public void invalidate(long id) {
-    CachedClient removed = cache.asMap().remove(id);
-    if (removed != null) {
-      closeQuietly(removed.client);
-    }
+    clients.invalidate(id);
   }
 
   Set<Long> cachedStoreIds() {
-    return Set.copyOf(cache.asMap().keySet());
+    return clients.cachedStoreIds();
   }
 
   @PreDestroy
   void shutdown() {
-    cache.asMap().values().forEach(c -> closeQuietly(c.client));
-    cache.invalidateAll();
+    clients.shutdown();
   }
 
   private OSSClient build(S3BlobStoreConfig config) {
@@ -112,8 +113,5 @@ public class OssClientFactory {
     } catch (Exception ignored) {
       // best-effort close on cache eviction / shutdown
     }
-  }
-
-  private record CachedClient(String signature, OSSClient client) {
   }
 }

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 70;
+  private static final int LATEST_MIGRATION = 72;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -140,7 +140,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
 
       Flyway resumed = migration(null);
-      assertEquals(1, resumed.migrate().migrationsExecuted);
+      assertEquals(LATEST_MIGRATION - 69, resumed.migrate().migrationsExecuted);
       assertEquals(0, resumed.migrate().migrationsExecuted);
       assertTrue(resumed.validateWithResult().validationSuccessful);
       assertEquals(0L, jdbc().queryForObject(
@@ -151,6 +151,29 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       assertEquals(7L, jdbc().queryForObject(
           "SELECT revision FROM download_offload_settings WHERE id = 1", Long.class));
     }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void bearerGenerationMigrationResumesAfterEitherCommittedColumn(boolean bothColumns) {
+    Flyway throughV71 = migration("71");
+    throughV71.clean();
+    assertEquals(71, throughV71.migrate().migrationsExecuted);
+    jdbc().execute("ALTER TABLE docker_auth_token ADD COLUMN subject_api_key_generation VARCHAR(64) NULL");
+    if (bothColumns) {
+      jdbc().execute("ALTER TABLE conan_auth_token ADD COLUMN api_key_generation VARCHAR(64) NULL");
+    }
+
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND ((table_name = 'docker_auth_token' AND column_name = 'subject_api_key_generation')
+            OR (table_name = 'conan_auth_token' AND column_name = 'api_key_generation'))
+        """, Integer.class));
   }
 
   @Test

@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.LdapSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
@@ -742,6 +743,179 @@ class SecurityManagementServiceValidationTest {
     assertEquals(1, service.listApiKeysForOwner("Local", "alice").size());
     assertEquals(Optional.of(rawToken), ApiKeyTokenPayloads.decryptRawToken(stored.encryptedPayload()));
     assertEquals(SecurityHashing.sha256(rawToken), stored.apiKeyHash());
+  }
+
+  @Test
+  void userTokenIsAUserCodeAndPasscodePairHashedAsAWhole() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+
+    var created = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("usertoken", null, null, "docker", null, List.of(), null, null, null));
+    var reset = service.resetApiKeyForOwner(created.apiKey().id(), "OIDC", "carol");
+
+    String token = created.token();
+    String userCode = token.substring(0, token.indexOf(':'));
+    assertEquals(UserTokens.DOMAIN, created.apiKey().domain());
+    assertEquals(true, UserTokens.matches(userCode, token.substring(userCode.length() + 1)));
+    assertEquals(userCode, created.apiKey().tokenPrefix());
+    ApiKeyRecord stored = dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow();
+    assertEquals(SecurityHashing.sha256(reset.token()), stored.apiKeyHash());
+    assertNotEquals(token, reset.token());
+    // One user token per user: self-service creation does not reveal it again (#559).
+    assertThrows(ApiKeyAlreadyExistsException.class, () -> service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null)));
+  }
+
+  @Test
+  void keyAuthenticatedCallersCannotCreateRevealOrRotateUserTokensInAnySpelling() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+
+    for (String domain : List.of("UserToken", "usertoken", "UserToken ", " USERTOKEN\t")) {
+      var error = assertThrows(org.springframework.web.server.ResponseStatusException.class, () ->
+          service.createApiKeyForOwner("OIDC", "carol",
+              new ApiKeyCommand(domain, null, null, null, null, List.of(), null, null, null), true));
+      assertEquals(403, error.getStatusCode().value(), domain);
+    }
+    var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class, () ->
+        service.resetApiKeyForOwner(token.apiKey().id(), "OIDC", "carol", true));
+    assertEquals(403, reset.getStatusCode().value());
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+
+    // Ordinary API keys stay manageable with a key.
+    var nexus = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("nexus", null, null, null, null, List.of(), null, null, null), true);
+    assertNotEquals(nexus.token(),
+        service.resetApiKeyForOwner(nexus.apiKey().id(), "OIDC", "carol", true).token());
+  }
+
+  @Test
+  void administrativePathsAlsoRefuseUserTokenManagementToKeyAuthenticatedCallers() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    ApiKeyCommand adminCreate =
+        new ApiKeyCommand(" usertoken", "OIDC", "carol", null, null, List.of(), null, null, null);
+    ApiKeyCommand adminImport = new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null,
+        List.of(), null, null, SecurityHashing.sha256("ABCDEFGHJK:" + "a".repeat(43)));
+
+    // An admin authenticated with an API key: neither reveal nor reset nor import a user token.
+    withCaller(17L, () -> {
+      for (ApiKeyCommand command : List.of(adminCreate, adminImport)) {
+        var error = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> service.createApiKey(command));
+        assertEquals(403, error.getStatusCode().value());
+      }
+      var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+          () -> service.resetApiKey(token.apiKey().id()));
+      assertEquals(403, reset.getStatusCode().value());
+      assertTrue(service.createApiKey(
+          new ApiKeyCommand("nexus", "OIDC", "carol", null, null, List.of(), null, null, null)).token() != null);
+    });
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "mallory").isEmpty());
+
+  }
+
+  @Test
+  void administratorsCanViewAndRevokeButNeverObtainOrSetAnotherUsersToken() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    String chosenPair = "ABCDEFGHJK:" + "a".repeat(43);
+
+    // A signed-in administrator: no reveal of carol's token, no issue for mallory, no import, no reset.
+    withCaller(null, () -> {
+      for (ApiKeyCommand command : List.of(
+          new ApiKeyCommand(" usertoken", "OIDC", "carol", null, null, List.of(), null, null, null),
+          new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null, List.of(), null, null, null),
+          new ApiKeyCommand(UserTokens.DOMAIN, "OIDC", "carol", null, null, List.of(), null, null,
+              SecurityHashing.sha256(chosenPair)),
+          new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null, List.of(), null, null,
+              SecurityHashing.sha256(chosenPair)))) {
+        var error = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> service.createApiKey(command), command.ownerUserId());
+        assertEquals(403, error.getStatusCode().value());
+      }
+      var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+          () -> service.resetApiKey(token.apiKey().id()));
+      assertEquals(403, reset.getStatusCode().value());
+
+      // Metadata stays visible: the user code identifies the token, the secret is never part of it.
+      ApiKeyView listed = service.findApiKey(token.apiKey().id()).orElseThrow();
+      assertEquals(UserTokens.DOMAIN, listed.domain());
+      assertEquals(UserTokens.userCode(token.token()), listed.tokenPrefix());
+      // Ordinary keys keep the existing administrative behaviour.
+      var nexus = service.createApiKey(
+          new ApiKeyCommand("nexus", "OIDC", "carol", null, null, List.of(), null, null, null));
+      assertNotEquals(nexus.token(), service.resetApiKey(nexus.apiKey().id()).token());
+    });
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "mallory").isEmpty());
+
+    // The administrator revokes it; the owner generates a replacement from their own session.
+    withCaller(null, () -> service.deleteApiKey(token.apiKey().id()));
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").isEmpty());
+    var replacement = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    assertNotEquals(token.token(), replacement.token());
+  }
+
+  @Test
+  void apiKeyDomainsFollowOneAsciiIdentityRule() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    // Spellings a database collation could fold into another domain never reach storage.
+    for (String domain : List.of("UsérToken", "\uFF35serToken", "User\u00ADToken", "Npm Token", "x".repeat(101))) {
+      assertThrows(SecurityValidationException.class, () -> service.createApiKey(
+          new ApiKeyCommand(domain, "OIDC", "carol", null, null, List.of(), null, null, null)), domain);
+      assertThrows(SecurityValidationException.class, () -> service.createApiKeyForOwner("OIDC", "carol",
+          new ApiKeyCommand(domain, null, null, null, null, List.of(), null, null, null)), domain);
+    }
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").isEmpty());
+    // ASCII case variants of the reserved domain are stored canonically; other names keep their spelling.
+    assertEquals(UserTokens.DOMAIN, service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("USERTOKEN", null, null, null, null, List.of(), null, null, null)).apiKey().domain());
+    assertEquals("Npm.Token_v-2", service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("Npm.Token_v-2", null, null, null, null, List.of(), null, null, null)).apiKey().domain());
+  }
+
+  @Test
+  void resetKeepsTheIdAndAnnouncesTheRotationSoIssuedBearersAreRevoked() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    List<Object> events = new java.util.ArrayList<>();
+    service.configureEvents(events::add);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    assertTrue(events.isEmpty());
+
+    var reset = service.resetApiKeyForOwner(token.apiKey().id(), "OIDC", "carol");
+
+    assertEquals(token.apiKey().id(), reset.apiKey().id());
+    assertEquals(List.of(new ApiKeyRotatedEvent(token.apiKey().id())), events);
+  }
+
+  private static void withCaller(Long apiKeyId, Runnable action) {
+    var request = new org.springframework.mock.web.MockHttpServletRequest();
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, new AuthenticatedSubject(
+        "Local", "admin", apiKeyId == null ? "local" : "api-key", apiKeyId,
+        new PermissionSubject("Local", "admin", Set.of("nx-admin"), null)));
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(request));
+    try {
+      action.run();
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+    }
   }
 
   @Test

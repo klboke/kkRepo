@@ -18,7 +18,7 @@ function setup(repositories = [repository()]) {
   const elements = new Map();
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      classList: { contains: () => true },
+      classList: { contains: name => name === 'is-active' && id === 'security-scanning-view' },
       value: '', textContent: '', innerHTML: '', dataset: {}, checked: false,
       options: ['', '86400', '604800', '2592000'].map(value => ({ value })),
       querySelectorAll: () => [], appendChild(option) { this.options.push(option); },

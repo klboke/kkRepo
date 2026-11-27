@@ -276,6 +276,21 @@ class S3BlobStorageTest {
     }
   }
 
+  @Test
+  void aFileBelowTheMultipartThresholdIsUploadedInOneRequest() throws Exception {
+    S3Client client = mock(S3Client.class);
+    S3BlobStorage storage = new S3BlobStorage(client, config(64 * 1024 * 1024L));
+    Path file = Files.writeString(tempDir.resolve("small.bin"), "payload");
+    try {
+      BlobReference reference = storage.putFile("repo", "path/small.bin", file, "sha");
+
+      assertEquals(7, reference.size());
+      verify(client).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+    } finally {
+      storage.close();
+    }
+  }
+
   private static S3BlobStoreConfig config(long multipartThreshold) {
     return S3BlobStoreConfig.of(
         1,

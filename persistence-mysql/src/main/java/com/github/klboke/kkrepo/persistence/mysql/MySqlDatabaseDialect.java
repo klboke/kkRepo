@@ -61,6 +61,12 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public String caseSensitiveText(String expression) {
+    // Text columns use utf8mb4_unicode_ci; an explicit binary collation decides the comparison.
+    return "(" + expression + " COLLATE utf8mb4_bin)";
+  }
+
+  @Override
   public String tableReferenceWithPreferredIndex(String tableName, String indexName) {
     return tableName + " FORCE INDEX (" + indexName + ")";
   }
@@ -480,8 +486,13 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractJson(String column, String... path) {
+      return "JSON_EXTRACT(" + column(column) + ", '" + path(path) + "')";
+    }
+
+    @Override
     public String extractText(String column, String... path) {
-      return "JSON_UNQUOTE(JSON_EXTRACT(" + column(column) + ", '" + path(path) + "'))";
+      return "JSON_UNQUOTE(" + extractJson(column, path) + ")";
     }
 
     @Override
@@ -509,6 +520,14 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
             ?, '$[*]' COLUMNS (%s BIGINT PATH '$')
           ) AS scope
           """.formatted(alias, alias);
+    }
+
+    @Override
+    public String textArrayContainsIgnoreCase(String arrayColumn, String valueExpression) {
+      // Lowercasing serialized JSON keeps it valid: escapes use lowercase letters or hex digits.
+      // JSON_CONTAINS compares strings exactly, avoiding column collation mismatches.
+      return "JSON_CONTAINS(CAST(LOWER(CAST(%s AS CHAR)) AS JSON), JSON_QUOTE(LOWER(%s)))"
+          .formatted(arrayColumn, valueExpression);
     }
 
     private static String column(String value) {
