@@ -45,6 +45,8 @@
 .icon-waypoints { --lucide-icon: url("./icons/waypoints.svg"); }
 .icon-network { --lucide-icon: url("./icons/network.svg"); }
 .icon-route { --lucide-icon: url("./icons/route.svg"); }
+.icon-split { --lucide-icon: url("./icons/split.svg"); }
+.icon-braces { --lucide-icon: url("./icons/braces.svg"); }
 .icon-log-in { --lucide-icon: url("./icons/log-in.svg"); }
 .icon-user-round { --lucide-icon: url("./icons/user-round.svg"); }
 .icon-user-round-x { --lucide-icon: url("./icons/user-round-x.svg"); }
@@ -52,6 +54,7 @@
 .icon-sliders-horizontal { --lucide-icon: url("./icons/sliders-horizontal.svg"); }
 .icon-database-backup { --lucide-icon: url("./icons/database-backup.svg"); }
 .icon-arrow-left-right { --lucide-icon: url("./icons/arrow-left-right.svg"); }
+.icon-import { --lucide-icon: url("./icons/import.svg"); }
 .icon-boxes { --lucide-icon: url("./icons/boxes.svg"); }
 .icon-cloud-download { --lucide-icon: url("./icons/cloud-download.svg"); }
 .icon-package { --lucide-icon: url("./icons/package.svg"); }

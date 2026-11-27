@@ -481,14 +481,19 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   public void upsertAnonymousConfig(SecurityAnonymousConfigRecord record) {
-    JdbcUpserts.updateThenInsert(
-        jdbcTemplate,
-        """
-        UPDATE security_anonymous_config
-        SET enabled = ?, user_source = ?, user_id = ?, realm_name = ?
-        WHERE id = 1
-        """,
-        new Object[]{record.enabled(), record.userSource(), record.userId(), record.realmName()},
+    upsertAnonymous(record, """
+        UPDATE security_anonymous_config SET enabled = ?, user_source = ?, user_id = ?, realm_name = ? WHERE id = 1
+        """, record.enabled(), record.userSource(), record.userId(), record.realmName());
+  }
+
+  @Override
+  public void upsertAnonymousAccount(SecurityAnonymousConfigRecord record) {
+    upsertAnonymous(record, "UPDATE security_anonymous_config SET enabled = ?, user_id = ? WHERE id = 1",
+        record.enabled(), record.userId());
+  }
+
+  private void upsertAnonymous(SecurityAnonymousConfigRecord record, String updateSql, Object... updateArguments) {
+    JdbcUpserts.updateThenInsert(jdbcTemplate, updateSql, updateArguments,
         """
         INSERT INTO security_anonymous_config
           (id, enabled, user_source, user_id, realm_name)

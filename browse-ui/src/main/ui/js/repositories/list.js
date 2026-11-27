@@ -1,7 +1,7 @@
 import { copyRepositoryUrl } from "../controls/clipboard.js";
 import { formatBadge, lucideIcon, repoIcon } from "../controls/icons.js";
 import { escapeHtml } from "../details/format.js";
-import { browseListHash, pushBrowseRoute, switchView } from "../shell/routes.js";
+import { browseListHash, repositoryBrowseHash, pushBrowseRoute, switchView } from "../shell/routes.js";
 import { expanded, renderBrowseHeading, showRepositoryTree, state } from "../tree/browser.js";
 
 const listState = {
@@ -156,12 +156,12 @@ function renderRepoList() {
   document.getElementById("repository-table").innerHTML = rows.map((repo) => {
     const clientUrl = repositoryClientUrl(repo);
     return `
-    <tr data-repo="${repo.name}" class="repo-row">
+    <tr data-repo="${escapeHtml(repo.name)}" class="repo-row">
       <td class="icon-column">${repoIcon(repo.type)}</td>
-      <td>${repo.name}</td>
-      <td>${repo.type}</td>
+      <td><a class="repo-name-link" href="${escapeHtml(repositoryBrowseHash(repo.name))}">${escapeHtml(repo.name)}</a></td>
+      <td>${escapeHtml(repo.type)}</td>
       <td>${formatBadge(repo.format)}</td>
-      <td>${repo.status}</td>
+      <td><span class="state-badge compact ${repo.status === "Online" ? "ok" : "warn"}">${escapeHtml(repo.status)}</span></td>
       <td class="repo-url-cell">
         <div class="repo-url-content">
           <a class="repo-url-link" href="${escapeHtml(clientUrl)}" target="_blank" rel="noopener">${escapeHtml(clientUrl)}</a>
@@ -170,7 +170,7 @@ function renderRepoList() {
       </td>
     </tr>
   `;
-  }).join("");
+  }).join("") || `<tr><td colspan="6" class="empty-cell">${filter.trim() ? "No matching repositories." : "No repositories available."}</td></tr>`;
   document.querySelectorAll("#repository-table .repo-copy-button").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.stopPropagation();

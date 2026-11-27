@@ -1,3 +1,4 @@
+const modalOpeners = new WeakMap();
 const formModalDismissHandlers = new Map();
 
 function formModalElement(formId) {
@@ -38,7 +39,7 @@ function focusFormModal(formId, preferredFocusId = null) {
   const target = isFocusableModalElement(preferred)
     ? preferred
     : modalFocusCandidates(modal)[0];
-  if (target) setTimeout(() => target.focus(), 0);
+  if (target) setTimeout(() => { if (activeFormModal() === modal) target.focus(); }, 0);
 }
 
 function openFormModal(formId, preferredFocusId = null) {
@@ -47,6 +48,7 @@ function openFormModal(formId, preferredFocusId = null) {
   const modal = formModalElement(formId);
   form.hidden = false;
   if (modal) {
+    if (modal.hidden) modalOpeners.set(modal, document.activeElement);
     modal.hidden = false;
     modal.setAttribute("aria-hidden", "false");
   }
@@ -58,9 +60,12 @@ function closeFormModal(formId) {
   const form = document.getElementById(formId);
   if (form) form.hidden = true;
   const modal = formModalElement(formId);
-  if (modal) {
+  if (modal && !modal.hidden) {
     modal.hidden = true;
     modal.setAttribute("aria-hidden", "true");
+    const opener = modalOpeners.get(modal);
+    modalOpeners.delete(modal);
+    if (opener?.isConnected && !opener.closest("[hidden]")) opener.focus({ preventScroll: true });
   }
   updateFormModalBodyState();
 }

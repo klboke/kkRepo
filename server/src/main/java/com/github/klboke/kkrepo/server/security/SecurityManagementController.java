@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapStatus;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousAccountCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.CreatedApiKeyView;
@@ -212,6 +213,11 @@ public class SecurityManagementController {
   @GetMapping("/anonymous")
   public AnonymousSettingsView anonymousSettings() {
     return securityService.anonymousSettings();
+  }
+
+  @PutMapping("/anonymous/account")
+  public AnonymousSettingsView updateAnonymousAccount(@RequestBody AnonymousAccountCommand command) {
+    return securityService.saveAnonymousAccount(command);
   }
 
   @PutMapping("/anonymous")

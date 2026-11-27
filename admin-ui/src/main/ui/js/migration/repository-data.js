@@ -83,12 +83,12 @@ function renderRepositoryDataMigrationStatus(payload, title = "Repository data m
       <div><span>Migrated</span><strong>${escapeHtml(compactNumber(migratedAssets))}</strong></div>
       <div><span>Pending</span><strong>${escapeHtml(compactNumber(pendingAssets))}</strong></div>
       <div><span>Failed</span><strong>${escapeHtml(compactNumber(failedAssets))}</strong></div>
-      <div><span>Package progress</span><strong>${escapeHtml(formatPercent(packagePercent))}</strong></div>
+      <div><span>Package progress</span><strong>${totalAssets > 0 ? escapeHtml(formatPercent(packagePercent)) : "—"}</strong></div>
     </div>
     <div class="migration-progress-panel">
       <div class="migration-progress-head">
         <span>${escapeHtml(phase)}</span>
-        <strong>${escapeHtml(formatPercent(packagePercent))}</strong>
+        <strong>${totalAssets > 0 ? escapeHtml(formatPercent(packagePercent)) : "—"}</strong>
       </div>
       ${renderProgressBar(completedAssets, totalAssets)}
       <div class="migration-progress-meta">
@@ -155,8 +155,9 @@ function repositoryJobPending(job) {
 
 function renderProgressBar(done, total) {
   const percent = progressPercent(done, total);
+  if (total <= 0) return '<div class="migration-progress-track is-unknown" role="progressbar" aria-label="Package progress"></div>';
   return `
-    <div class="migration-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(percent.toFixed(1))}">
+    <div class="migration-progress-track" aria-label="Package progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(percent.toFixed(1))}">
       <span style="width: ${escapeHtml(percent.toFixed(2))}%"></span>
     </div>
   `;
@@ -164,6 +165,7 @@ function renderProgressBar(done, total) {
 
 function renderCompactProgressBar(done, total) {
   const percent = progressPercent(done, total);
+  if (total <= 0) return '<span class="health-muted">—</span>';
   return `
     <div class="repo-progress">
       <div class="repo-progress-track">${renderProgressFill(percent)}</div>

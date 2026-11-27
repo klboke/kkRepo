@@ -16,7 +16,6 @@ import {
   saveSecurityPrivilege,
   saveSecurityRole,
   saveSecurityUser,
-  securityAnonymousRequiredFields,
   securityPrivilegeRequiredFields,
   securityPrivileges,
   securityRoleRequiredFields,
@@ -42,11 +41,11 @@ import {
   oidcRequiredFields,
   refreshSecurityLdapRequiredMarkers,
   refreshSecurityOidcRequiredMarkers,
-  saveSecurityAnonymous,
   saveSecurityLdap,
   saveSecurityOidc,
-  saveSecurityRealms,
 } from "./providers.js";
+import { bindAnonymousEditor } from "./anonymous.js";
+import { bindRealmEditor } from "./realms.js";
 import { switchView } from "../shell/routes.js";
 
 export function bindSecurityEvents() {
@@ -132,7 +131,7 @@ export function bindSecurityEvents() {
     const deleteButton = event.target.closest(".delete-security-privilege-button");
     if (deleteButton) deleteSecurityPrivilege(deleteButton.dataset.id);
   });
-  document.getElementById("save-security-realms-button").addEventListener("click", saveSecurityRealms);
+  bindRealmEditor();
   document.getElementById("save-security-ldap-button").addEventListener("click", saveSecurityLdap);
   document.getElementById("security-ldap-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -157,12 +156,7 @@ export function bindSecurityEvents() {
     });
   });
   bindSecurityProviderJson("oidc");
-  document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
-  document.getElementById("security-anonymous-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    saveSecurityAnonymous();
-  });
-  bindRequiredFieldErrors(securityAnonymousRequiredFields);
+  bindAnonymousEditor();
   document.getElementById("copy-security-api-key").addEventListener("click", copySecurityApiKey);
   document.getElementById("create-security-api-key-button").addEventListener("click", showSecurityApiKeyForm);
   document.getElementById("cancel-security-api-key-button").addEventListener("click", hideSecurityApiKeyForm);

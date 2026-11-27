@@ -752,28 +752,6 @@ textarea:focus-visible {
   min-width: 0;
 }
 
-.workspace-tabs {
-  height: 56px;
-}
-
-.workspace-tab {
-  min-width: 92px;
-  padding: 0 18px;
-  color: var(--topbar-muted);
-  font-size: 13px;
-  font-weight: var(--fw-bold);
-}
-
-.workspace-tab:hover {
-  background: var(--topbar-hover);
-  color: var(--topbar-ink);
-}
-
-.workspace-tab.is-active {
-  background: var(--topbar-selection);
-  color: var(--topbar-ink);
-}
-
 .top-icon,
 .signout {
   height: 56px;

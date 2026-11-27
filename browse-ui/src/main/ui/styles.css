@@ -6,3 +6,5 @@
 @import "./styles/details.css";
 @import "./styles/layout.css";
 @import "./styles/responsive.css";
+@import "#ui-shared/console.css";
+@import "./styles/workspace.css";

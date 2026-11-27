@@ -16,32 +16,26 @@
 }
 
 .side-group {
+  height: 30px;
   justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
   padding: 0 12px;
-  color: #70807a;
+  color: var(--ink-3);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: var(--fw-bold);
-  letter-spacing: 0;
+  letter-spacing: .05em;
   text-transform: uppercase;
 }
 
 .side-group:hover {
-  background: #f3f8f5;
-  color: #344641;
+  background: var(--surface-sunken);
+  color: var(--ink-1);
 }
 
 .side-group.is-current {
-  background: #edf7f4;
-  color: var(--active);
-}
-
-.side-group.is-current:not(.is-open) {
-  background: var(--active);
-  color: var(--active-ink);
-  box-shadow: var(--shadow-nav);
+  color: var(--brand-strong);
 }
 
 .side-group-caret {
@@ -87,7 +81,7 @@
 
 .page-heading {
   min-height: 76px;
-  margin: 0 24px;
+  margin: 0;
   padding: 0;
   border-bottom: 1px solid var(--line);
 }
@@ -131,7 +125,7 @@ h1 {
   height: auto;
   min-height: 54px;
   gap: 10px;
-  padding: 12px 24px 8px;
+  padding: 12px 0 8px;
 }
 
 .button-row {
@@ -238,7 +232,7 @@ h1 {
 .audit-filter-bar,
 .pagination-bar,
 .placeholder {
-  margin: 0 24px 18px;
+  margin: 0 0 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);

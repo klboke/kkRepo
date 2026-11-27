@@ -1,3 +1,4 @@
+import { copyWithFeedback } from "../controls/clipboard.js";
 import { iconForFile, lucideIcon } from "../controls/icons.js";
 import { escapeHtml, formatBytesDetail, formatInstant } from "./format.js";
 import { usageDetailForEntry } from "./usage.js";
@@ -130,7 +131,7 @@ function renderUsageSection(snippets) {
         <header class="panel-head">Usage</header>
         <div class="panel-body">
           <div class="usage-row">
-            <select class="usage-pick" id="usage-pick">
+            <select class="usage-pick" id="usage-pick" aria-label="Usage">
               ${snippets.map((snippet, index) =>
                 `<option value="${index}">${escapeHtml(snippet.displayName)}</option>`).join("")}
             </select>
@@ -138,6 +139,7 @@ function renderUsageSection(snippets) {
           </div>
           <p class="usage-hint" id="usage-hint">${escapeHtml(first.description || "")}</p>
           <pre class="snippet"><code id="usage-snippet">${colorizeSnippet(first.snippetText)}</code></pre>
+          <p class="copy-feedback" role="status"></p>
         </div>
       </section>`;
 }
@@ -155,23 +157,8 @@ function bindUsageControls(mount, snippets) {
     code.innerHTML = colorizeSnippet(snippet.snippetText);
     hint.textContent = snippet.description || "";
   });
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(selected().snippetText);
-      copy.classList.add("copied");
-      copy.innerHTML = lucideIcon("check");
-      copy.title = "Copied";
-      copy.setAttribute("aria-label", "Usage snippet copied");
-      setTimeout(() => {
-        copy.classList.remove("copied");
-        copy.innerHTML = lucideIcon("copy");
-        copy.title = "Copy";
-        copy.setAttribute("aria-label", "Copy usage snippet");
-      }, 1200);
-    } catch {
-      /* clipboard blocked */
-    }
-  });
+  copy.addEventListener("click", () => copyWithFeedback(copy, selected().snippetText, "Copy usage snippet",
+    "Usage snippet copied", "Copy failed. Select the command and copy it manually.", mount.querySelector(".copy-feedback")));
 }
 
 function renderDetailPane({ crumbIcon, crumbText, summaryRows, snippets, deleteEntry }) {

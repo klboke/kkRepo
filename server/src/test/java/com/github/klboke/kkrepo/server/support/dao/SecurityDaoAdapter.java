@@ -244,6 +244,11 @@ public class SecurityDaoAdapter implements SecurityDao {
   }
 
   @Override
+  public void upsertAnonymousAccount(SecurityAnonymousConfigRecord record) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public void upsertAnonymousConfig(SecurityAnonymousConfigRecord arg0) {
     throw new UnsupportedOperationException();
   }

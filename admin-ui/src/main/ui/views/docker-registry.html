@@ -2,27 +2,47 @@
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-container" aria-hidden="true"></span></span>
             <h1>Docker Registry</h1>
-            <span class="heading-copy">Manage Docker connector runtime and repository cache</span>
-          </div>
-          <div class="action-bar">
-            <button class="create-button" id="docker-connectors-refresh-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh connectors</button>
-            <button class="create-button secondary" id="docker-cache-clear-button" type="button">Clear Docker cache</button>
+            <span class="heading-copy">Connector status and transfers on the responding node</span>
           </div>
           <div class="docker-ops-layout">
-            <section class="ops-panel">
-              <div class="ops-panel-head">Connector runtime</div>
-              <div class="summary-grid compact-summary" id="docker-connector-summary"></div>
+            <section aria-labelledby="docker-connectors-title">
+              <div class="docker-section-head">
+                <h2 id="docker-connectors-title">Repository connectors</h2>
+                <span id="docker-connector-summary" role="status"></span>
+                <button class="create-button secondary" id="docker-connectors-refresh-button" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Sync connectors</button>
+              </div>
+              <p id="docker-operations-status" role="alert" hidden></p>
               <div class="nx-table-frame">
-                <table class="nx-table compact docker-connector-table">
-                  <thead><tr><th>Repository</th><th>Type</th><th>Port</th><th>Public URL</th><th>State</th><th>Active</th></tr></thead>
-                  <tbody id="docker-connector-table"></tbody>
+                <table class="nx-table compact docker-connector-table" role="table" aria-labelledby="docker-connectors-title">
+                  <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Repository</th><th scope="col" role="columnheader">Listener</th><th scope="col" role="columnheader">Public URL</th><th scope="col" role="columnheader">Status</th></tr></thead>
+                  <tbody id="docker-connector-table" role="rowgroup"></tbody>
                 </table>
               </div>
             </section>
-            <section class="ops-panel">
-              <div class="ops-panel-head">Transfer limits</div>
-              <div class="summary-grid compact-summary" id="docker-transfer-summary"></div>
-              <div class="ops-status" id="docker-operations-status"></div>
+            <section aria-labelledby="docker-transfers-title">
+              <div class="docker-section-head"><h2 id="docker-transfers-title">Transfers</h2></div>
+              <dl class="docker-transfers" id="docker-transfer-summary">
+                <div><dt>Uploads</dt><dd><strong id="docker-active-uploads">—</strong> <span>in progress</span> <span class="docker-limit"><span>Limit</span>: <span id="docker-max-uploads">—</span></span></dd></div>
+                <div><dt>Downloads</dt><dd><strong id="docker-active-downloads">—</strong> <span>in progress</span> <span class="docker-limit"><span>Limit</span>: <span id="docker-max-downloads">—</span></span></dd></div>
+              </dl>
             </section>
+            <div class="docker-details">
+              <details>
+                <summary><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span> <span>Node diagnostics</span><span id="docker-last-sync"></span></summary>
+                <dl class="docker-diagnostics">
+                  <dt>Node ID</dt><dd id="docker-node-id" data-i18n-skip>—</dd>
+                  <dt>Sequence</dt><dd id="docker-sequence">—</dd>
+                  <dt>Last refreshed</dt><dd id="docker-refreshed-at" data-i18n-skip>—</dd>
+                  <dt>Runtime errors</dt><dd id="docker-runtime-errors">—</dd>
+                </dl>
+              </details>
+              <details>
+                <summary><span class="lucide-icon icon-chevron-right" aria-hidden="true"></span> <span>Cache maintenance</span></summary>
+                <div class="docker-cache-maintenance">
+                  <p>Invalidate cached content lookups and metadata across all Docker repositories.</p>
+                  <button class="create-button secondary" id="docker-cache-clear-button" type="button">Clear Docker cache</button>
+                </div>
+              </details>
+            </div>
           </div>
         </section>

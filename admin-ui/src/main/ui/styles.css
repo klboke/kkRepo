@@ -6,3 +6,8 @@
 @import "./styles/security.css";
 @import "./styles/cleanup.css";
 @import "./styles/system.css";
+@import "#ui-shared/console.css";
+@import "./styles/workspace.css";
+@import "./styles/docker.css";
+@import "./styles/realms.css";
+@import "./styles/anonymous.css";

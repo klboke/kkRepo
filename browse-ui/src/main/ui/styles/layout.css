@@ -32,7 +32,7 @@
 
 .page-heading {
   min-height: 86px;
-  margin: 0 24px;
+  margin: 0;
   padding: 0;
   border-bottom: 1px solid var(--line);
 }
@@ -80,13 +80,13 @@ h2 {
 
 .admin-bootstrap-panel,
 .token-layout {
-  margin: 18px 24px;
+  margin: 18px 0;
 }
 
 .format-showcase {
-  width: calc(100% - 48px);
+  width: 100%;
   max-width: 1120px;
-  margin: 18px 24px 24px;
+  margin: 18px 0 24px;
 }
 
 .format-showcase-heading {
@@ -191,8 +191,7 @@ h2 {
 .table-tools,
 .search-form,
 .upload-layout {
-  padding-right: 24px;
-  padding-left: 24px;
+  padding-inline: 0;
 }
 
 .table-tools {
@@ -233,7 +232,7 @@ h2 {
 }
 
 .nx-table-frame {
-  margin: 0 24px 24px;
+  margin: 0 0 24px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--panel);
@@ -396,7 +395,7 @@ h2 {
 }
 
 .result-note {
-  margin: 0 24px 10px;
+  margin: 0 0 10px;
   font-size: 13px;
 }
 
@@ -434,7 +433,7 @@ code,
 }
 
 .browse-split {
-  margin: 0 24px 24px;
+  margin: 0 0 24px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -520,25 +519,20 @@ code,
     overflow-x: auto;
   }
 
-  .page-heading,
-  .nx-table-frame,
-  .browse-split,
-  .format-showcase,
-  .admin-bootstrap-panel,
-  .token-layout {
-    margin-right: 16px;
-    margin-left: 16px;
+  .search-subnav .side-subitem {
+    width: auto;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 980px) {
+  .search-subnav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
 
-  .format-showcase {
-    width: calc(100% - 32px);
-  }
-
-  .table-tools,
-  .search-form,
-  .upload-layout {
-    padding-right: 16px;
-    padding-left: 16px;
+  .search-subnav .side-subitem {
+    margin-inline-start: 0;
   }
 }
 
@@ -593,9 +587,9 @@ code,
 #browse-view .table-tools {
   position: absolute;
   top: 24px;
-  right: 24px;
+  inset-inline-end: var(--console-gutter);
   z-index: 2;
-  width: min(272px, calc(100% - 48px));
+  width: 272px;
   height: auto;
   padding: 0;
 }

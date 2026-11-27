@@ -5,7 +5,10 @@ import { showToast } from "../controls/toast.js";
 import { refreshRepositoryRecipeControls } from "./form.js";
 import { listRepositoryRecipes } from "./api.js";
 
+import { placeAnchoredPanel } from "#ui-shared/anchored-panel.js";
+
 let repositoryRecipes = [];
+let releaseRecipePanel;
 
 let activeRepositoryRecipeName = null;
 
@@ -123,15 +126,17 @@ function openRepositoryRecipeCombobox() {
   activeRepositoryRecipeName = document.getElementById("repository-recipe").value
     || repositoryRecipes[0]?.name
     || null;
-  popover.hidden = false;
   trigger.setAttribute("aria-expanded", "true");
   renderRepositoryRecipeOptions();
-  setTimeout(() => document.getElementById("repository-recipe-search").focus(), 0);
+  releaseRecipePanel = placeAnchoredPanel(trigger, popover, { onDetach: closeRepositoryRecipeCombobox });
+  document.getElementById("repository-recipe-search").focus({ preventScroll: true });
 }
 
 function closeRepositoryRecipeCombobox(focusTrigger = false) {
   const popover = document.getElementById("repository-recipe-popover");
   const trigger = document.getElementById("repository-recipe-trigger");
+  releaseRecipePanel?.();
+  releaseRecipePanel = null;
   popover.hidden = true;
   trigger.setAttribute("aria-expanded", "false");
   activeRepositoryRecipeName = null;
@@ -169,6 +174,7 @@ function bindRepositoryRecipeCombobox() {
   const search = document.getElementById("repository-recipe-search");
   const options = document.getElementById("repository-recipe-options");
 
+  window.addEventListener("hashchange", () => closeRepositoryRecipeCombobox());
   trigger.addEventListener("click", toggleRepositoryRecipeCombobox);
   trigger.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -191,6 +197,12 @@ function bindRepositoryRecipeCombobox() {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       moveActiveRepositoryRecipe(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const recipes = visibleRepositoryRecipes();
+      setActiveRepositoryRecipe((event.key === "Home" ? recipes[0] : recipes.at(-1))?.name, true);
       return;
     }
     if (event.key === "Enter") {

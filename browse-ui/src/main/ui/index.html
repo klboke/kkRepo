@@ -7,6 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/browse/assets/favicon.svg?v=20260609-kl-logo-1">
     <link id="kkrepo-theme-stylesheet" rel="stylesheet" href="/browse/assets/themes/default.css?v=@assetVersion@">
     <script src="/login/assets/ui-theme.js?v=@assetVersion@"></script>
+    <script src="/browse/assets/workspace-switch.js?v=@assetVersion@"></script>
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=@assetVersion@">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=@assetVersion@">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=@assetVersion@">
@@ -19,6 +20,7 @@
   <body>
     <div class="nx-shell">
       <header class="nx-topbar">
+        <button id="navigation-toggle" class="navigation-toggle" type="button" aria-label="Navigation" aria-expanded="false" aria-controls="workspace-navigation"><span aria-hidden="true"></span></button>
         <div class="product">
           <a class="logo-mark product-home-link" href="https://github.com/klboke/kkRepo" target="_blank" rel="noopener noreferrer" aria-label="kkRepo GitHub repository">KL</a>
           <div class="product-copy">
@@ -26,7 +28,7 @@
           </div>
         </div>
         <nav class="workspace-tabs" aria-label="Workspace">
-          <a class="workspace-tab is-active" href="/browse/#browse/welcome" aria-current="page">Browse</a>
+          <a class="workspace-tab" href="/browse/#browse/welcome" aria-current="page">Browse<span class="workspace-marker" aria-hidden="true"></span></a>
           <a class="workspace-tab" id="admin-workspace-link" href="/admin/#admin/repository/repositories" hidden>Admin</a>
         </nav>
         <div class="top-spacer"></div>
@@ -78,7 +80,7 @@
         </div>
       </header>
 
-      <aside class="nx-sidebar">
+      <aside class="nx-sidebar" id="workspace-navigation">
         <nav class="side-nav" aria-label="Browse navigation">
           <button class="side-item" data-view="welcome" type="button">
             <span class="side-icon lucide-icon icon-home" aria-hidden="true"></span>

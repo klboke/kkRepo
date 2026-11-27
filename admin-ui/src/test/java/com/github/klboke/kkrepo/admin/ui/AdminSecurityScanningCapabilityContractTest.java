@@ -34,9 +34,7 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(javascript.contains("KKREPO_SECURITY_SCANNING_ENABLED=true"));
     assertTrue(css.contains(".security-scan-capability-banner[hidden]"));
     assertTrue(css.contains(".is-deployment-disabled .security-scan-capability-content"));
-    assertTrue(css.contains("margin: 0 24px 16px"));
     assertTrue(css.contains(".security-scan-panel > .nx-table-frame"));
-    assertTrue(css.contains("margin-right: 16px"));
   }
 
   @Test

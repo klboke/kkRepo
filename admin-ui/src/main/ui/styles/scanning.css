@@ -26,9 +26,7 @@
 }
 .security-scan-summary {
   grid-template-columns: repeat(10, minmax(136px, 1fr));
-  margin-right: 24px;
   margin-bottom: 18px;
-  margin-left: 24px;
   overflow-x: auto;
   padding-bottom: 2px;
 }
@@ -183,7 +181,7 @@
 .security-scan-capability-banner {
   display: grid;
   gap: 4px;
-  margin: 0 24px 16px;
+  margin: 0 0 16px;
   padding: 12px 14px;
   border: 1px solid #b8c4d6;
   border-radius: 6px;
@@ -220,7 +218,7 @@
   flex-wrap: nowrap;
   gap: 0;
   overflow-x: auto;
-  margin: 0 24px 16px;
+  margin: 0 0 16px;
   padding: 0;
   border-bottom: 1px solid var(--border-subtle, #d8dee8);
 }
@@ -278,7 +276,7 @@
 .security-scan-panel,
 .cleanup-tab-panel {
   display: none;
-  margin: 0 24px 24px;
+  margin: 0 0 24px;
 }
 
 .security-scan-panel.is-active,
@@ -835,16 +833,6 @@
 }
 
 @media (max-width: 980px) {
-  .security-scan-summary,
-  .security-scan-capability-banner,
-  .security-scan-tabs,
-  .security-scan-panel,
-  .cleanup-tabs,
-  .cleanup-tab-panel {
-    margin-right: 16px;
-    margin-left: 16px;
-  }
-
   .security-scan-list-toolbar {
     flex-wrap: wrap;
   }
@@ -894,3 +882,5 @@
     padding-top: 4px;
   }
 }
+
+.security-scan-list-toolbar .form-switch { white-space: nowrap; }

@@ -1,11 +1,10 @@
 
 .security-provider-workspace {
   display: grid;
-  width: calc(100% - 48px);
   grid-template-columns: minmax(0, 13fr) minmax(300px, 7fr);
   align-items: start;
   gap: 16px;
-  margin: var(--settings-heading-gap) 24px 24px;
+  margin: var(--settings-heading-gap) 0 24px;
 }
 
 .security-provider-form {
@@ -265,8 +264,7 @@
   }
 
   .security-provider-workspace {
-    width: calc(100% - 24px);
-    margin: var(--settings-heading-gap) 12px 18px;
+    margin-bottom: 18px;
   }
 
   .security-provider-section-grid,

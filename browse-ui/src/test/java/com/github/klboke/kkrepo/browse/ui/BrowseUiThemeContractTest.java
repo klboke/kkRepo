@@ -135,7 +135,7 @@ class BrowseUiThemeContractTest {
     assertTrue(nexusTheme.contains("--account-focus-ring-color: var(--brand)"));
     assertTrue(nexusTheme.contains("--ink-4: #6c7279"));
     assertTrue(nexusTheme.contains("--focus: var(--brand)"));
-    assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .workspace-tab.is-active"));
+    assertTrue(nexusTheme.contains("--topbar-active: var(--brand)"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .global-component-search input"));
     assertTrue(nexusTheme.contains(
         "--account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7)"));

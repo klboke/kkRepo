@@ -1,0 +1,24 @@
+.repo-name-link { color: var(--ink-1); font-weight: var(--fw-semibold); text-decoration: none; }
+.repo-name-link:hover { color: var(--brand-strong); text-decoration: underline; }
+.tree-header { border-bottom-color: var(--line); }
+.tree-row .tree-label { padding: 2px 4px; margin: 0; min-width: 0; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--ink-2); font: inherit; text-align: start; }
+.tree-row.is-selected { background: var(--brand-tint); box-shadow: inset 2px 0 var(--brand); }
+.tree-row.is-selected .tree-label { color: var(--brand-strong); font-weight: var(--fw-semibold); }
+.tree-toggle:hover:enabled { background: var(--surface-sunken); }
+.browse-split { border-radius: var(--r-lg); border-color: var(--line); }
+.detail-right { background: var(--surface-muted); }
+.detail-pane .panel { overflow: hidden; border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+.detail-pane .panel-head { padding: 9px 12px; background: var(--surface-muted); color: var(--ink-2); border-bottom: 1px solid var(--line); font-size: var(--fs-sm); font-weight: var(--fw-bold); }
+.detail-pane :is(.kv-value,.detail-crumb,code) { overflow-wrap: anywhere; }
+.detail-pane .snippet { padding: 12px; background: var(--surface-muted); box-shadow: inset 3px 0 var(--brand); border-radius: var(--r-sm); white-space: pre-wrap; user-select: text; }
+.usage-row { gap: 8px; }
+.usage-row :is(.usage-pick,.usage-copy) { height: var(--console-control); border-color: var(--line-strong); border-radius: var(--r-sm); background: var(--surface); }
+.usage-row .usage-copy { flex-basis: var(--console-control); }
+.usage-copy.copied, .repo-copy-button.copied { color: var(--success); background: var(--success-bg); }
+.usage-copy.copy-failed, .repo-copy-button.copy-failed { color: var(--danger); background: var(--danger-bg); }
+.format-grid .format-item { border-color: var(--line); background: var(--surface); }
+.token-panel, .upload-form { border-color: var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); }
+.upload-form .upload-status:not(:empty) { padding: 8px 12px; background: var(--surface-muted); border-inline-start: 3px solid var(--info); border-radius: var(--r-xs); }
+.upload-form .upload-status.ok { border-color: var(--success); }
+.upload-form .upload-status.error { border-color: var(--danger); }
+.upload-button[aria-busy="true"] { cursor: progress; }

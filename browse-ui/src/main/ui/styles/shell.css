@@ -165,36 +165,6 @@ select {
   outline-offset: 2px;
 }
 
-.workspace-tabs {
-  display: flex;
-  align-self: stretch;
-  align-items: stretch;
-}
-
-.workspace-tab {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 88px;
-  padding: 0 18px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.workspace-tab:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-}
-
-.workspace-tab.is-active {
-  background: var(--active);
-  color: #ffffff;
-}
-
 .top-icon {
   display: grid;
   align-items: center;

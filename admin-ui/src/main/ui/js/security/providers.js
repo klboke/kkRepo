@@ -1,4 +1,3 @@
-import { escapeHtml } from "../controls/display.js";
 import {
   clearRequiredFieldErrors,
   markInputValidity,
@@ -10,10 +9,8 @@ import {
   textInputValue,
   updateRequiredMarker,
   updateRequiredMarkers,
-  validateRequiredFields,
 } from "../controls/fields.js";
 import { showToast } from "../controls/toast.js";
-import { accessState, securityAnonymousRequiredFields } from "./access.js";
 import { fetchJson, responseErrorMessage } from "../shell/http.js";
 
 let securityLdap = null;
@@ -285,49 +282,6 @@ function bindSecurityProviderJson(provider) {
   });
 }
 
-async function loadSecurityRealms() {
-  accessState.securityRealms = await fetchJson("/internal/security/realms", [], "Failed to load realms");
-  renderSecurityRealms();
-}
-
-function renderSecurityRealms() {
-  document.getElementById("security-realm-table").innerHTML = accessState.securityRealms.map((realm) => `
-    <tr data-realm-id="${escapeHtml(realm.realmId)}">
-      <td><input class="security-realm-enabled" type="checkbox"${realm.enabled || realm.realmId === "local" ? " checked" : ""}${realm.realmId === "local" ? ' disabled title="Local realm is required."' : ""}></td>
-      <td><input class="security-realm-priority" type="number" value="${Number(realm.priority) || 0}"></td>
-      <td>${escapeHtml(realm.name)} <code>${escapeHtml(realm.realmId)}</code></td>
-      <td>${escapeHtml(realm.type)}</td>
-      <td>${escapeHtml(realm.attributes?.source || "")}</td>
-    </tr>
-  `).join("");
-}
-
-async function saveSecurityRealms() {
-  const commands = Array.from(document.querySelectorAll("#security-realm-table tr")).map((row) => {
-    const realm = accessState.securityRealms.find((item) => item.realmId === row.dataset.realmId);
-    return {
-      realmId: row.dataset.realmId,
-      type: realm?.type,
-      name: realm?.name,
-      enabled: row.dataset.realmId === "local" || row.querySelector(".security-realm-enabled").checked,
-      priority: Number(row.querySelector(".security-realm-priority").value || 0)
-    };
-  });
-  try {
-    const response = await fetch("/internal/security/realms", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(commands)
-    });
-    if (!response.ok) throw new Error(await responseErrorMessage(response));
-    accessState.securityRealms = await response.json();
-    renderSecurityRealms();
-    showToast("Realms saved.", "ok");
-  } catch (error) {
-    showToast(`Save failed: ${error.message}`, "error");
-  }
-}
-
 async function loadSecurityLdap() {
   securityLdap = await fetchJson(
     "/internal/security/ldap",
@@ -448,7 +402,6 @@ async function saveSecurityLdap() {
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     securityLdap = await response.json();
     renderSecurityLdap();
-    accessState.securityRealms = await fetchJson("/internal/security/realms", [], "Failed to refresh realms");
     showToast("LDAP settings saved.", "ok");
   } catch (error) {
     showToast(`Save failed: ${error.message}`, "error");
@@ -560,47 +513,7 @@ async function saveSecurityOidc() {
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     securityOidc = await response.json();
     renderSecurityOidc();
-    accessState.securityRealms = await fetchJson("/internal/security/realms", [], "Failed to refresh realms");
     showToast("OIDC settings saved.", "ok");
-  } catch (error) {
-    showToast(`Save failed: ${error.message}`, "error");
-  }
-}
-
-async function loadSecurityAnonymous() {
-  accessState.securityAnonymous = await fetchJson(
-    "/internal/security/anonymous",
-    { enabled: false, userSource: "Local", userId: "anonymous", realmName: "NexusAuthorizingRealm" },
-    "Failed to load anonymous settings");
-  renderSecurityAnonymous();
-}
-
-function renderSecurityAnonymous() {
-  const settings = accessState.securityAnonymous || {};
-  document.getElementById("security-anonymous-enabled").checked = Boolean(settings.enabled);
-  document.getElementById("security-anonymous-source").value = "Local";
-  document.getElementById("security-anonymous-user-id").value = settings.userId || "anonymous";
-  document.getElementById("security-anonymous-realm-name").value = settings.realmName || "NexusAuthorizingRealm";
-}
-
-async function saveSecurityAnonymous() {
-  if (!validateRequiredFields(securityAnonymousRequiredFields)) return;
-  const payload = {
-    enabled: document.getElementById("security-anonymous-enabled").checked,
-    userSource: "Local",
-    userId: document.getElementById("security-anonymous-user-id").value.trim() || "anonymous",
-    realmName: document.getElementById("security-anonymous-realm-name").value.trim() || "NexusAuthorizingRealm"
-  };
-  try {
-    const response = await fetch("/internal/security/anonymous", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) throw new Error(await responseErrorMessage(response));
-    accessState.securityAnonymous = await response.json();
-    renderSecurityAnonymous();
-    showToast("Anonymous access saved.", "ok");
   } catch (error) {
     showToast(`Save failed: ${error.message}`, "error");
   }
@@ -611,15 +524,11 @@ export {
   bindSecurityProviderJson,
   clearSecurityLdapRequiredErrors,
   ldapRequiredFields,
-  loadSecurityAnonymous,
   loadSecurityLdap,
   loadSecurityOidc,
-  loadSecurityRealms,
   oidcRequiredFields,
   refreshSecurityLdapRequiredMarkers,
   refreshSecurityOidcRequiredMarkers,
-  saveSecurityAnonymous,
   saveSecurityLdap,
   saveSecurityOidc,
-  saveSecurityRealms,
 };

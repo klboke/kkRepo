@@ -82,6 +82,9 @@ public interface SecurityDao {
 
   void upsertAnonymousConfig(SecurityAnonymousConfigRecord record);
 
+  /** Update activation and user ID only. Source and realm are defaults for a missing row. */
+  void upsertAnonymousAccount(SecurityAnonymousConfigRecord record);
+
   List<SecurityRepositoryTargetRecord> listRepositoryTargets();
 
   Optional<SecurityRepositoryTargetRecord> findRepositoryTarget(String targetId);

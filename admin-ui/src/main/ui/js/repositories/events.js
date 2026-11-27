@@ -36,7 +36,10 @@ import {
 import { bindSecurityTransfers } from "../security/access.js";
 import { positionBlobStoreActionMenu } from "../storage/blob-stores.js";
 
+import { bindRepositoryRowActions } from "./row-actions.js";
+
 export function bindRepositoriesEvents() {
+  bindRepositoryRowActions(deleteRepository);
   document.getElementById("repository-filter").addEventListener("input", renderRepositories);
   document.getElementById("repository-store-filter").addEventListener("change", renderRepositories);
   document.getElementById("repository-usage-refresh").addEventListener("click", () => loadRepositories());
@@ -101,10 +104,6 @@ export function bindRepositoriesEvents() {
     if (editButton) {
       showEditRepositoryForm(editButton.dataset.name);
       return;
-    }
-    const deleteButton = event.target.closest(".delete-repository-button");
-    if (deleteButton) {
-      deleteRepository(deleteButton.dataset.name);
     }
   });
   document.getElementById("docker-connectors-refresh-button").addEventListener("click", refreshDockerConnectors);

@@ -158,14 +158,14 @@ function renderSecurityScanSummary() {
         title="${escapeHtml(databaseRevision)}">${databaseRevisionMarkup}</strong>
     </div>`;
   target.innerHTML = scannerCard + databaseRevisionCard + [
-    ["Candidate backlog", summary.candidateBacklog ?? 0],
-    ["Pending tasks", summary.pendingTasks ?? 0],
-    ["Running", summary.runningTasks ?? 0],
-    ["Failed", summary.failedTasks ?? 0],
-    ["Complete assets", summary.completeAssets ?? 0],
-    ["Partial / stale", (summary.partialAssets ?? 0) + (summary.staleAssets ?? 0)],
-    ["Policy blocks", summary.blockedAssets ?? 0],
-    ["Critical / high", `${summary.criticalFindings ?? 0} / ${summary.highFindings ?? 0}`]
+    ["Candidate backlog", summary.candidateBacklog ?? "—"],
+    ["Pending tasks", summary.pendingTasks ?? "—"],
+    ["Running", summary.runningTasks ?? "—"],
+    ["Failed", summary.failedTasks ?? "—"],
+    ["Complete assets", summary.completeAssets ?? "—"],
+    ["Partial / stale", summary.partialAssets == null || summary.staleAssets == null ? "—" : summary.partialAssets + summary.staleAssets],
+    ["Policy blocks", summary.blockedAssets ?? "—"],
+    ["Critical / high", `${summary.criticalFindings ?? "—"} / ${summary.highFindings ?? "—"}`]
   ].map(([label, value]) =>
     `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
   document.getElementById("security-scan-status").textContent =

@@ -1,3 +1,4 @@
+import { placeAnchoredPanel } from "#ui-shared/anchored-panel.js";
 import { responseErrorMessage } from "./shell/http.js";
 
 // Each dialog gets a fresh snapshot. No user catalog is retained across openings.
@@ -85,6 +86,9 @@ function combobox(input, candidates, changed) {
   list.setAttribute("role", "listbox");
   list.setAttribute("aria-label", input.getAttribute("aria-label") || input.id);
   list.hidden = true;
+  const usePopover = typeof list.showPopover === "function";
+  if (usePopover) list.setAttribute("popover", "manual");
+  let release;
   wrapper.append(list);
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-autocomplete", "list");
@@ -96,6 +100,8 @@ function combobox(input, candidates, changed) {
   let selected = "", options = [], active = -1;
 
   function close() {
+    release?.();
+    release = null;
     list.hidden = true;
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
@@ -134,6 +140,7 @@ function combobox(input, candidates, changed) {
       empty.textContent = "No matches. Refine your search.";
       list.append(empty);
     }
+    if (usePopover && !release) release = placeAnchoredPanel(input, list, { maxHeight: 220, onDetach: close });
     list.hidden = false;
     input.setAttribute("aria-expanded", "true");
   }

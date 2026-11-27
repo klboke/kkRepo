@@ -763,6 +763,24 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void consoleAnonymousAccountEditsPreserveTheConfiguredRealm() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var controller = new SecurityManagementController(new SecurityManagementService(dao));
+    var edit = new SecurityPayloads.AnonymousAccountCommand(false, " reader ");
+    assertEquals("NexusAuthorizingRealm", controller.updateAnonymousAccount(edit).realmName());
+
+    dao.anonymous(new SecurityAnonymousConfigRecord(true, "LDAP", "guest", "ImportedRealm"));
+    var updated = controller.updateAnonymousAccount(edit);
+
+    assertEquals(new SecurityPayloads.AnonymousSettingsView(false, "Local", "reader", "ImportedRealm"), updated);
+    assertThrows(SecurityValidationException.class, () -> controller.updateAnonymousAccount(null));
+    assertThrows(SecurityValidationException.class, () -> controller.updateAnonymousAccount(
+        new SecurityPayloads.AnonymousAccountCommand(null, "reader")));
+    assertThrows(SecurityValidationException.class, () -> controller.updateAnonymousAccount(
+        new SecurityPayloads.AnonymousAccountCommand(true, " ")));
+  }
+
+  @Test
   void nexusAnonymousSettingsUpdateKeepsAnonymousSourceLocal() {
     FakeSecurityDao dao = new FakeSecurityDao();
     NexusSecurityRestController controller = controller(dao);
@@ -3145,6 +3163,12 @@ class NexusSecurityRestControllerTest {
     @Override
     public Optional<SecurityAnonymousConfigRecord> findAnonymousConfig() {
       return Optional.ofNullable(anonymousConfig);
+    }
+
+    @Override
+    public void upsertAnonymousAccount(SecurityAnonymousConfigRecord record) {
+      anonymousConfig = anonymousConfig == null ? record : new SecurityAnonymousConfigRecord(
+          record.enabled(), anonymousConfig.userSource(), record.userId(), anonymousConfig.realmName());
     }
 
     @Override

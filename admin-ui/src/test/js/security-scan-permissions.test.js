@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 const source = declarations;
-const browse = require("../../../../scripts/ui/test-fixture.cjs")("browse");
+const browse = require("../../../../scripts/ui/test-fixture.cjs")("browse", "admin");
 const extract = (name, text = source) => text(name);
 function setup(permissions = ['nexus:security-scanning:read']) {
   const elements = new Map();

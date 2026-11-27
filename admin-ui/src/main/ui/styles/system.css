@@ -41,12 +41,6 @@
 }
 
 @media (max-width: 900px) {
-  .credentials-tabs,
-  .credentials-notice {
-    margin-right: 16px;
-    margin-left: 16px;
-  }
-
   .credentials-form .form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -97,7 +91,7 @@
   grid-template-columns: minmax(0, 2.25fr) minmax(250px, 1fr);
   align-items: start;
   gap: 16px;
-  margin: 0 24px 24px;
+  margin: 0 0 24px;
 }
 .proxy-settings-layout > .blobstore-form { margin: 0; }
 .proxy-settings-counts { margin: 0; }

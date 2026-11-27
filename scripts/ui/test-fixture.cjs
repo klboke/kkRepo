@@ -4,10 +4,10 @@ const { readFileSync, readdirSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const { createContext } = require("node:vm");
 
-module.exports = function workspaceFixtures(app) {
+module.exports = function workspaceFixtures(app, toolsOwner = app) {
   const root = resolve(__dirname, "../..");
   const mod = join(root, app + "-ui");
-  const { parseAst } = require(join(mod, "target/ui-tools/node_modules/rollup/dist/parseAst.js"));
+  const { parseAst } = require(join(root, toolsOwner + "-ui", "target/ui-tools/node_modules/rollup/dist/parseAst.js"));
   const definitions = new Map();
 
   function visit(directory) {

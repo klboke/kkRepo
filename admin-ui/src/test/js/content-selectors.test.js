@@ -51,7 +51,10 @@ test('loading selectors with Object prototype names keeps every row and its own 
     names.forEach((name, index) => {
       const expected = Object.hasOwn(references, name) ? references[name] : [];
       assert.equal(rows[index].children[4].children[0].textContent, expected.join(', ') || '—');
-      assert.equal(rows[index].children[5].children[2].disabled, expected.length > 0);
+      const [, createPrivilege, remove] = rows[index].children[5].children;
+      assert.equal(createPrivilege.children[0].className, 'lucide-icon icon-plus');
+      assert.equal(createPrivilege.children[0].ariaHidden, 'true');
+      assert.equal(remove.disabled, expected.length > 0);
     });
   }
 });

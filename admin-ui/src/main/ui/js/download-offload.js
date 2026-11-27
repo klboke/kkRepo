@@ -1,3 +1,4 @@
+import { copyLocationText } from "#ui-shared/clipboard.js";
 import { responseErrorMessage } from "./shell/http.js";
 import { canAdmin } from "./shell/session.js";
 
@@ -354,6 +355,7 @@ function showExample() {
   el("example-title").textContent = `${wire.method.label} ${t("deployment example")}`;
   el("example-note").textContent = t(exampleNotes[wire.method.id]
     || "Mount each selected store read-only on the proxy and add its internal file route.");
+  el("example-copy-status").textContent = "";
   el("example-code").value = deploymentExample(wire, ids);
   const docs = proxyDocs[wire.method.id];
   el("proxy-docs").hidden = !docs;
@@ -498,11 +500,12 @@ function bind() {
   el("copy-example").addEventListener("click", async () => {
     const code = el("example-code");
     try {
-      await navigator.clipboard.writeText(code.value);
+      await copyLocationText(code.value);
+      el("example-copy-status").textContent = t("Copied");
     } catch (_) {
       code.focus();
       code.select();
-      document.execCommand("copy");
+      el("example-copy-status").textContent = t("Copy failed");
     }
   });
   el("verify").addEventListener("click", showVerification);

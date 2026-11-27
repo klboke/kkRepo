@@ -4,6 +4,7 @@ const { readFileSync } = require("node:fs");
 const { resolve } = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const assertSharedScriptOrder = require("../../../../scripts/ui/assert-entrypoint.cjs");
 
 const resources = resolve(__dirname, "../../../target/generated-ui/META-INF/resources/browse");
 
@@ -265,3 +266,7 @@ for (const staleOutcome of ["success", "failure"]) {
     assert.deepEqual(app.views, renderedViews);
   });
 }
+
+test("Browse loads shared scripts before their consumers", () => {
+  assertSharedScriptOrder("browse");
+});

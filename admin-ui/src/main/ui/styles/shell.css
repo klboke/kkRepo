@@ -107,33 +107,6 @@ select {
   font-size: 18px;
 }
 
-.docker-ops-layout {
-  display: grid;
-  gap: 12px;
-  padding: 0 10px 24px;
-}
-
-.ops-panel {
-  border-top: 1px solid var(--line);
-  background: #ffffff;
-}
-
-.ops-panel-head {
-  border-bottom: 1px solid var(--line);
-  background: var(--header);
-  color: #333333;
-  font-weight: 700;
-  padding: 9px 10px;
-}
-
-.compact-summary {
-  margin: 10px;
-}
-
-.docker-connector-table {
-  min-width: 980px;
-}
-
 .ops-status {
   min-height: 18px;
   margin: 0 10px 12px;
@@ -396,36 +369,6 @@ select {
   border-radius: 3px;
   outline: 2px solid var(--topbar-focus-outline);
   outline-offset: 2px;
-}
-
-.workspace-tabs {
-  display: flex;
-  align-self: stretch;
-  align-items: stretch;
-}
-
-.workspace-tab {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 88px;
-  padding: 0 18px;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.workspace-tab:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-}
-
-.workspace-tab.is-active {
-  background: var(--active);
-  color: #ffffff;
 }
 
 .top-icon,
