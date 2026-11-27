@@ -1,4 +1,4 @@
-import { bindNavigationDisclosure } from "#ui-shared/navigation.js";
+import { bindNavigationDisclosure, bindWorkspaceSwitch } from "#ui-shared/navigation.js";
 import { bindFormControls } from "#ui-shared/form-controls.js";
 import "./shell/legacy-route.js";
 import { bindShellEvents } from "./shell/navigation-events.js";
@@ -13,6 +13,7 @@ import { bindMigrationEvents } from "./migration/events.js";
 import { bootstrap } from "./shell/start.js";
 
 bindNavigationDisclosure();
+bindWorkspaceSwitch();
 bindFormControls();
 bindShellEvents();
 bindRepositoriesEvents();

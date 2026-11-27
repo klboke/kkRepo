@@ -131,10 +131,6 @@
   box-shadow: 0 1px 0 rgba(31, 34, 38, 0.06);
 }
 
-:root[data-theme="nexus"] .workspace-tab.is-active {
-  color: #ffffff;
-}
-
 :root[data-theme="nexus"] .global-component-search input,
 :root[data-theme="nexus"] .user-menu-trigger,
 :root[data-theme="nexus"] .account-login {

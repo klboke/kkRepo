@@ -1,4 +1,4 @@
-import { bindNavigationDisclosure } from "#ui-shared/navigation.js";
+import { bindNavigationDisclosure, bindWorkspaceSwitch } from "#ui-shared/navigation.js";
 import { bindFormControls } from "#ui-shared/form-controls.js";
 import { bindShellEvents } from "./shell/navigation-events.js";
 import { bindSearchEvents } from "./search/events.js";
@@ -9,6 +9,7 @@ import { initializeLoginReturnTo } from "./shell/session.js";
 import { bootstrap } from "./shell/start.js";
 
 bindNavigationDisclosure();
+bindWorkspaceSwitch();
 bindFormControls();
 bindShellEvents();
 bindSearchEvents();

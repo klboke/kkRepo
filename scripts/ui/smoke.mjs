@@ -88,6 +88,11 @@ try {
 
   const page = await browser.newPage();
   page.on("pageerror", error => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    document.addEventListener("DOMContentLoaded", () => {
+      window.workspaceSwitchAnimated = Boolean(document.querySelector(".workspace-marker")?.getAnimations().length);
+    });
+  });
   await page.goto(origin + "/browse/");
   await expect(page.locator("#welcome-view")).toBeVisible();
   await verifyEntryAssets(page, "browse");
@@ -115,6 +120,19 @@ try {
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
   await verifyControlIcons(page);
+  const workspaces = page.locator(".workspace-tabs");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await workspaces.getByRole("link", { name: "Browse" }).click();
+  await expect(workspaces.getByRole("link", { current: "page" })).toHaveText("Browse");
+  await page.waitForLoadState("domcontentloaded");
+  assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), true, "The active underline moves between workspaces");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await workspaces.getByRole("link", { name: "Admin" }).press("Enter");
+  await expect(workspaces.getByRole("link", { current: "page" })).toHaveText("Admin");
+  await page.waitForLoadState("domcontentloaded");
+  assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), false, "Reduced motion switches immediately");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(page.locator("#repositories-view")).toBeVisible();
   const repositoryIcons = await page.locator("#side-group-repository-items .side-item-icon")
     .evaluateAll(icons => icons.map(icon => getComputedStyle(icon).maskImage));
   assert.ok(repositoryIcons.length > 0 && !repositoryIcons.includes("none"));

@@ -267,16 +267,6 @@ body {
     min-width: 0;
   }
 
-  .workspace-tabs {
-    order: 3;
-    width: 100%;
-    margin: 8px 0 0;
-  }
-
-  .workspace-tab {
-    flex: 1;
-  }
-
   #browse-view .page-heading {
     padding-right: 0;
   }
