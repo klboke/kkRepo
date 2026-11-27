@@ -9,70 +9,49 @@
 
 **English** | [中文](README.cn.md)
 
-kkRepo is a community-driven, fully open-source, self-hosted artifact repository designed to address the limitations and pain points of Sonatype Nexus Community Edition and provide the community with an open, reliable, and sustainably evolving artifact management solution. It currently supports Maven, npm, OHPM/HarmonyOS, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Conan 2, Alpine/APK, R/CRAN, Hugging Face Models, Git LFS, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other artifact formats.
+kkRepo is a community-driven, open-source, self-hosted artifact repository. We built it to address the limitations and operational challenges of Sonatype Nexus Community Edition and give the community an open, reliable artifact manager it can maintain and improve over time.
 
-## Features
+Use it to publish private packages, cache upstream dependencies, or migrate existing Sonatype Nexus Repository installations. It supports 24 formats, including Maven, npm, and Docker/OCI.
 
-- Support for 24 repository formats, with hosted, proxy, and group availability depending on the format.
-- Supports AOT compilation and runtime, with about one-second startup readiness and memory usage below 200 MB.
-- Per-repository outbound HTTP or SOCKS5 proxy configuration for proxy repositories, with optional proxy authentication and HTTPS upstream tunneling.
-- Artifact security scanning with CycloneDX SBOM generation, known-vulnerability matching, policy and waiver management, and optional download enforcement.
-- Rich artifact cleanup policies for enterprise-grade artifact lifecycle management.
-- Compatibility with Sonatype Nexus APIs, user permission model, and the `/repository/<repo>/...` URL layout.
-- Use kkRepo as a drop-in replacement for Sonatype Nexus, with one-click migration of existing data while preserving repository domains and URLs, so client configurations and CI workflows continue unchanged.
-- Comprehensive identity and access control with Local, LDAP, and OIDC authentication, configurable anonymous access policies, and fine-grained permissions.
-- Comprehensive observability with Prometheus metrics export and Grafana dashboards.
-- MySQL or PostgreSQL-backed metadata and shared runtime state; MySQL remains the default.
-- OSS/S3/File storage support for artifact blobs.
-- Multi-replica high-availability deployment support.
+[Why kkRepo?](docs/en/why-kkrepo.md) · [Quick start](#quick-start) · [Supported repositories](#supported-repositories) · [Core features](#core-features) · [Migrate from Nexus](#migrating-from-sonatype-nexus-repository) · [Production deployment](docs/en/build-deployment-guide.md)
 
-## Trademark Notice
-
-Sonatype, Nexus, and Nexus Repository are trademarks of Sonatype, Inc. kkRepo is an independent open source project and is not affiliated with, endorsed by, sponsored by, or connected to Sonatype, Inc. References to Sonatype Nexus Repository are used only to describe compatibility, migration, or interoperability.
+![kkRepo welcome page showing 24 repository formats and their supported repository types](docs/img/browse-welcome.png)
 
 ## Quick Start
 
-Start a local trial environment with the public release image and MySQL:
+With Docker, Docker Compose, and curl installed, run this command in an empty directory to start kkRepo on the JVM with MySQL:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | bash
 ```
 
-To run the same image with the default PostgreSQL 16 quickstart instead (the runtime supports PostgreSQL 12+):
+### Upload your first artifact
+
+1. Open the [admin console](http://127.0.0.1:19090/admin/) and set a password for the initial local administrator, `admin`.
+2. Under **Blob Stores**, create a File blob store named `default` for this local trial.
+3. Under **Repositories**, choose `raw-hosted`, name the repository `raw-demo`, select the blob store you just created, and save.
+
+Upload a line of text, then read it back from the same URL. Enter the admin password when curl prompts you.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_DATABASE_TYPE=postgresql bash
+url=http://127.0.0.1:19090/repository/raw-demo/hello.txt
+printf 'Hello, kkRepo!\n' > hello.txt
+curl --fail --user admin --upload-file hello.txt "$url"
+curl --fail --user admin "$url"
 ```
 
-To use the multi-architecture Native image instead of the default JVM image:
+When the download prints `Hello, kkRepo!`, you have published and retrieved your first artifact. Open `raw-demo` in the [repository browser](http://127.0.0.1:19090/browse/) to see the file size, checksums, and download URL for `hello.txt`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | KKREPO_RUNTIME=native bash
-```
+<details>
+<summary>PostgreSQL, Native images, and health checks</summary>
 
-`KKREPO_RUNTIME` and `KKREPO_DATABASE_TYPE` are independent and can be combined, for example with `KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql`.
+The default runtime and database are JVM and MySQL. For PostgreSQL, replace `| bash` in the startup command with `| KKREPO_DATABASE_TYPE=postgresql bash`. For the Native image, use `| KKREPO_RUNTIME=native bash`. You can set both variables together.
 
-Open:
+[Local health check](http://127.0.0.1:19091/actuator/health) · [Inspect the startup script](scripts/quickstart.sh) · [Build and deployment guide](docs/en/build-deployment-guide.md)
 
-- Admin console: `http://127.0.0.1:19090/admin/`
-- User browser: `http://127.0.0.1:19090/browse/`
-- Health check: `http://127.0.0.1:19091/actuator/health`
+</details>
 
-On the first visit, create the initial `Local/admin` administrator password in the UI. The quickstart uses File blob storage for local trials; use OSS/S3 and your own encryption secrets for production.
-
-If you prefer to inspect the script before running it, download `scripts/quickstart.sh` first and then run it with `bash`.
-
-## Build And Deployment
-
-Local quick start, Spring Boot executable jar, Docker image, archive package, production deployment architecture, resource sizing, and upgrade flow are documented in the [Build And Deployment Guide](docs/en/build-deployment-guide.md).
-
-For measured startup, memory, image-size, and warmed-throughput tradeoffs between the default JVM runtime and the opt-in Native Image runtime, see the [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md).
-
-If kkRepo is deployed behind Nginx or another HTTPS reverse proxy, follow the [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md) so generated repository URLs, such as npm `dist.tarball`, keep the public `https://` scheme and host.
-
-Local hot-reload development and testing are documented in the [Development Guide](docs/en/development-guide.md).
-
-## Supported Capabilities
+## Supported Repositories
 
 | Format | Hosted | Proxy | Group | [Nexus migration](docs/en/nexus-migration-guide.md) |
 | :--- | :---: | :---: | :---: | :---: |
@@ -103,116 +82,108 @@ Local hot-reload development and testing are documented in the [Development Guid
 
 A ✓ under Nexus migration means the format has a supported migration path. The migration guide lists the repository types, data, and Nexus versions covered.
 
+## Core Features
+
+- **Artifact distribution.** Hosted repositories store your team's releases, proxies cache upstream packages on demand, and groups give clients one URL to read from multiple repositories. See the matrix above for each format's supported types.
+- **Streaming proxy downloads.** Enable streaming per proxy repository so clients can start downloading an uncached Docker layer, Maven artifact, or PyPI package while kkRepo reads it from upstream. Only complete, validated artifacts are added to the cache. [Supported artifacts and streaming conditions](docs/en/dev/proxy-streaming-downloads.md)
+- **Download offload.** For artifacts in a File blob store, kkRepo can check access and scanning policies, then hand a full-file download to a trusted reverse proxy such as Nginx. The proxy serves the bytes directly, reducing traffic through the application replicas. [Configure Nginx download offload](docs/en/nginx-reverse-proxy.md#download-offload)
+- **Identity and access.** Sign in with local accounts, LDAP, or OIDC. Assign repository permissions through roles, issue tokens for CI, and configure anonymous reads. [Security model](docs/en/security-model.md)
+- **Scanning and cleanup.** Enable SBOM generation and vulnerability scanning for selected repositories, enforce download policies with waivers, and preview which artifacts a cleanup policy would delete. [Artifact scanning](docs/en/artifact-scanning-guide.md) · [Cleanup policies](docs/en/cleanup-policy-guide.md)
+- **Multiple replicas.** Replicas share metadata, sessions, and task state through MySQL or PostgreSQL. Store production artifacts in S3, Alibaba Cloud OSS, or Azure Blob Storage. [Deployment architecture](docs/en/build-deployment-guide.md) · [Azure storage](docs/en/azure-blob-storage.md)
+
+The default distribution runs on the JVM. An optional Native image reached readiness in a median of **1.04 seconds** from container creation and used a median of **170.4 MiB** of container memory at idle in a local benchmark limited to two CPUs and 1 GiB. See the [Native and JVM comparison](docs/en/native-vs-jvm-guide.md) for the test setup and warmed throughput.
+
 ## Migrating From Sonatype Nexus Repository
 
-Migration is available in the `/admin/` console:
+When the kkRepo team migrated its own repositories, it kept the original domain. CI continued to use the same Maven settings, npm registry, and PyPI index URL after cutover. Read the [team's migration account](docs/en/why-kkrepo.md#migration-result) for the deployment history and outcome.
 
-1. Enable Script REST API script creation on the source Sonatype Nexus Repository deployment.
-2. On the `Nexus Metadata` page, run `Run preflight` first, then run `Run migration` after blocking issues are resolved.
-3. On the `Nexus Repository Data` page, run `Sync metadata` to migrate repository metadata, then run `Sync packages` to migrate the real blob data.
-4. For the first repository data migration, leave `Metadata since` empty to scan all data. Later runs can set `Metadata since` for incremental migration.
-5. After migration is complete, point the original repository domain to kkRepo. Non-Docker clients can keep the same `/repository/<repo>/...` URLs; Docker clients should keep the same `/v2/...` registry entrypoint, repository names, and connector/path-based routing shape.
+1. **Check the scope and run preflight.** Check the source Nexus version, repository formats, and data you need. Run preflight on the **Nexus Metadata** page in the admin console and resolve any blockers it reports.
+2. **Migrate configuration and artifacts.** Migrate users, permissions, and repository definitions first. Then use **Nexus Repository Data** to sync metadata and packages. Start with a full sync. Later runs can be incremental, and interrupted transfers can resume.
+3. **Verify and cut over.** Test permissions and downloads with your existing clients before pointing the original domain at kkRepo. Most clients keep their `/repository/<repo>/...` URLs. For Docker/OCI, preserve the `/v2/` entry point, repository names, and registry routing.
 
-Migration supports interruption and resume. Completed data is skipped on later runs. See the [Nexus Migration Guide](docs/en/nexus-migration-guide.md) for the full process.
+![Repository data migration tasks and progress in the admin console](docs/img/img_6.png)
 
-## Compatibility And Migration Context
+[Migration scope and prerequisites by format](docs/en/nexus-migration-guide.md) · [Migration playbook](docs/en/migration-playbook.md)
 
-| Dimension | Sonatype Nexus Repository OSS / Community Edition | kkRepo |
-| --- | --- | --- |
-| Product positioning | A general-purpose artifact repository management platform with broad format and management coverage | Provides migration-oriented client behavior, permission model, and `/repository/<repo>/...` URL compatibility while using a relational-database, OSS/S3-first, multi-replica-friendly architecture |
-| Supported formats | Officially supports more formats; exact capabilities vary by version and distribution | Focuses on common artifact formats. Currently supports Maven, npm, OHPM/HarmonyOS, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Conan 2, Alpine/APK, R/CRAN, Hugging Face Models, Git LFS, Docker/OCI, NuGet, RubyGems, Yum, and Raw. Each format is implemented as an independent protocol module for prioritized extension and validation |
-| Usage limits | Community Edition targets individuals and small teams. Official limits are up to 40,000 components and 100,000 requests/day. When exceeded, new component creation is paused until usage returns below the limits | Does not include Community Edition-style license usage limits. Capacity is bounded by the selected relational database, OSS/S3, replica count, and deployment sizing, so it can scale with actual business needs |
-| High availability deployment | Open source editions are suitable for a single instance or basic Kubernetes deployment; official HA deployment is a Pro capability | Designed for multi-replica deployment by default: session, authentication tickets, catalog watermarks, locks, migration progress, and short-lived coordination state are stored in MySQL or PostgreSQL. In-process cache is only a rebuildable hot cache |
-| Stability and upgrade | Version boundaries are complex: 3.70.x is the last version supporting OrientDB; 3.71.0 defaults new installs to H2, but H2 is still embedded; Community Edition did not support free external PostgreSQL until 3.77.0+; search was fully moved to SQL and away from Elasticsearch only in 3.88.0. Older OrientDB/Elasticsearch/local-data-directory deployments carry heavy upgrade windows and recovery depends heavily on backups, repair tasks, and manual intervention | MySQL/PostgreSQL runtime with no dependency on OrientDB or embedded Elasticsearch. Core state is in the shared relational database, blobs are in OSS/S3/File blob store, and cache/index data is rebuildable, making rolling upgrade, failover, and recovery easier |
-| Metadata storage | Historical versions moved across OrientDB, H2, PostgreSQL, and related migration paths. Older instances must handle database migration constraints during upgrade | Repositories, components, assets, permissions, tokens, audit logs, migration state, and rebuildable indexes use explicit MySQL or PostgreSQL table structures for easier troubleshooting, governance, and horizontal scaling |
-| Blob storage | Common deployments use local file blob store; object storage availability depends on version and configuration | OSS/S3-first, with File blob store retained for development and testing. The relational database stores only metadata, state, indexes, and references, not large blobs |
-| Search and indexing | Before 3.88.0, Nexus search and indexing were based on embedded Elasticsearch, with index files and database state separated. Index corruption or inconsistency requires Nexus repair/rebuild tasks | Uses relational-database denormalized indexes and protocol-derived metadata. browse/search/index data is designed to be rebuildable, and node-local cache loss does not affect correctness |
-| Architecture complexity | Nexus Repository is feature-rich and carries many general management capabilities and historical architecture mechanisms | kkRepo keeps the architecture simple and focuses on repository management and client protocol implementation |
+<details>
+<summary>More screenshots from Browse and Admin</summary>
 
-## Selection Guidance
-
-- If your business scale is very small, package count and traffic are within Community Edition limits, and occasional maintenance downtime is acceptable, the open source Sonatype Nexus Repository edition may be sufficient.
-- If stability, scalability, and multi-replica deployment matter, or if you manage a large number of packages, kkRepo is designed for that deployment shape.
-- If an existing Sonatype Nexus Repository instance runs into component-count or daily-request limits after upgrading to a newer Community Edition version, kkRepo provides a one-click migration flow designed for zero-downtime migration.
-
-## UI Overview
-
-### User UI
-
-The user UI is for artifact consumers. It provides repository lists, package search, directory browsing, artifact details, and upload entrypoints.
-
-The repository list shows hosted, proxy, and group repositories with format, status, and access URLs so users can copy client configuration URLs directly.
+![Artifact path, checksums, and client usage in the repository browser](docs/img/img_1.png)
 
 ![User repository list](docs/img/img_7.png)
 
-Search components by format across Maven, npm, OHPM/HarmonyOS, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Conan 2, Alpine/APK, R/CRAN, Hugging Face Models, Git LFS, Docker/OCI, NuGet, RubyGems, Yum, Raw, and other repository types.
-
 ![User artifact search](docs/img/img.png)
-
-Directory browsing shows repository path trees, artifact summaries, checksums, content type, update time, and client usage snippets.
-
-![User directory browsing and artifact details](docs/img/img_1.png)
-
-The upload page lets users select a repository, upload files, and set asset paths for manual publishing to hosted repositories.
 
 ![User artifact upload](docs/img/img_2.png)
 
-### Admin UI
-
-The admin UI is for repository administrators and focuses on repository configuration, storage health, security configuration, audit, and migration.
-
-The Blob Store page supports OSS Native SDK, AWS S3 SDK, and File engines, and shows read/write probe health.
-
 ![Admin Blob Store management](docs/img/img_4.png)
-
-The OIDC page manages issuer, JWKS, client, scope, claim mapping, and token validation parameters for integrating with centralized identity systems.
 
 ![Admin OIDC configuration](docs/img/img_3.png)
 
-The Nexus Metadata migration page migrates users, roles, privileges, blob stores, and repository definitions, and supports preflight checks.
-
 ![Admin Nexus metadata migration](docs/img/img_5.png)
 
-The Nexus Repository Data migration page shows hosted repository data migration tasks, concurrency settings, progress statistics, failure counts, and per-repository details.
+</details>
 
-![Admin Nexus repository data migration](docs/img/img_6.png)
+## Documentation
 
-AI agent and contributor development instructions are in [AGENTS.md](AGENTS.md).
+| Topic | Suggested reading |
+| --- | --- |
+| Origins and adoption | [Why we built kkRepo](docs/en/why-kkrepo.md) · [How a solar manufacturer migrated from Nexus (in Chinese)](docs/zh/blog/nexus-to-kkrepo-migration-case.md) |
+| Architecture and design choices | [Architecture](docs/en/architecture.md) · [Database backends](docs/en/database-backends.md) · [Database schema](docs/en/database-schema.md) · [MySQL entity relationships](docs/en/mysql-er.md) |
+| Compatibility and verification | [Format compatibility matrix](docs/en/compatibility-matrix.md) · [How kkRepo tests against Nexus](docs/en/nexus-compatibility-testing.md) · [Nexus REST API alignment](docs/en/dev/nexus-rest-api-alignment.md) |
+| Performance benchmarks | [Native vs. JVM](docs/en/native-vs-jvm-guide.md) · [Streaming proxy downloads](docs/en/dev/proxy-streaming-performance.md) · [APT against Nexus](docs/en/dev/apt-performance-baseline.md) |
+| Repositories and clients | [Format guides](docs/en/repository-guides/README.md) · [Client examples](docs/en/client-recipes.md) · [Set up a private Maven repository](docs/en/blog/setup-maven-private-repository-with-kkrepo.md) |
+| Migrating from Nexus | [Scope and prerequisites](docs/en/nexus-migration-guide.md) · [Migration playbook](docs/en/migration-playbook.md) |
+| Deployment and operations | [Build and deployment](docs/en/build-deployment-guide.md) · [Production hardening](docs/en/production-hardening.md) · [Nginx reverse proxy](docs/en/nginx-reverse-proxy.md) · [Monitoring](docs/en/monitoring-observability-guide.md) · [Backup and restore](docs/en/backup-restore.md) |
+| Access and artifact management | [Security model](docs/en/security-model.md) · [Content selectors](docs/en/content-selectors.md) · [Artifact scanning](docs/en/artifact-scanning-guide.md) · [Cleanup policies](docs/en/cleanup-policy-guide.md) · [Storage usage](docs/en/admin-storage-usage.md) |
+| Troubleshooting and development | [FAQ](docs/en/faq.md) · [Troubleshooting](docs/en/troubleshooting.md) · [Development guide](docs/en/development-guide.md) |
 
 ## Roadmap
 
-Platform infrastructure roadmap:
+### Planned
 
-1. ✅ PostgreSQL database backend - Implemented through the public `persistence-jdbc` contracts, semantic dialect SPIs, backend-owned Flyway migrations, dual-database contract tests, and multi-replica server smoke tests. MySQL remains the default backend ([database backend guide](docs/en/database-backends.md), [Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md)).
-2. ✅ Artifact security scanning - Implemented behind a disabled-by-default deployment capability gate. While disabled, upgrades do not process historical artifacts or add upload-outbox writes. After an operator explicitly enables capability, administrators still activate repositories individually in Admin UI; a feature-neutral transactional asset-change outbox then keeps uploads independent from asynchronous SBOM/known-vulnerability analysis. Durable multi-replica coordination, Docker/OCI multi-platform coverage, policy/waiver evaluation, and optional download enforcement are included ([usage guide](docs/en/artifact-scanning-guide.md), [Chinese design notes](docs/zh/dev/security-scanning-design.md)).
+- **Eclipse p2** — Proxy Eclipse and Equinox update sites.
+- **CocoaPods** — Fetch dependencies through a Nexus-compatible proxy repository.
 
-Repository format roadmap:
+### Delivered
 
-1. ✅ Docker / OCI Registry - Completed ([implementation notes](docs/en/dev/docker-repository-implementation-plan.md))
-2. ✅ Cargo / Rust - Repository support completed, including search, UI/API upload, and migration ([design notes](docs/en/dev/cargo-rust-repository-design.md))
-3. ✅ Dart / Pub - Repository support completed, including hosted/proxy/group, client E2E, UI/API upload, search, and Nexus migration ([Chinese design notes](docs/zh/dev/dart-pub-repository-design.md))
-4. ✅ Composer / PHP - Hosted, proxy, group, UI/API upload, search, real-client E2E, required Nexus live comparison, and explicitly selected Nexus proxy-cache migration E2E implemented ([Chinese design notes](docs/zh/dev/composer-php-repository-design.md))
-5. ✅ Terraform Provider / Module Registry - Hosted, proxy, group, provider GPG signing, Nexus-compatible paths, UI/API upload, search, real Terraform CLI E2E, Nexus hosted-data migration, and explicitly selected proxy-cache migration implemented ([Chinese design notes](docs/zh/dev/terraform-repository-design.md))
-6. ✅ Swift Package Registry - Hosted, GitHub-backed proxy, group, Registry v1, immutable signed publication, UI/API upload, Browse/Search, multi-replica coordination, real SwiftPM/Xcode E2E, and shape-gated Nexus 3.92.x-3.94.x migration are implemented ([Chinese design notes](docs/zh/dev/swift-package-registry-design.md))
-7. ✅ Ansible Galaxy - Galaxy v3 hosted/proxy/group, immutable collection publishing, dependency resolution, route-scoped Base64 Bearer/Ansible 2.9 Token and GenericToken authentication, UI/API upload, Browse/Search, durable multi-replica import/proxy coordination, real Ansible 2.9/current client E2E, Nexus black-box compatibility, and shape-gated Nexus 3.93.x-3.94.x migration are implemented ([usage guide](docs/en/repository-guides/ansible-galaxy.md), [Chinese design notes](docs/zh/dev/ansible-galaxy-repository-design.md))
-8. ✅ Conda - Hosted, proxy, group, `.tar.bz2`/`.conda` publication, JSON/BZ2/ZSTD channel metadata, UI/API upload, Browse/Search, multi-replica coordination, real Conda client E2E, Nexus black-box fixtures, and shape-gated Nexus 3.92.x-3.94.x hosted-data migration E2E are implemented ([Chinese design notes](docs/zh/dev/conda-repository-design.md))
-9. ✅ APT / Debian - Hosted/proxy repositories, signed metadata, UI/API upload, Browse/Search, multi-replica publication, real APT client and Nexus black-box checks, shape-gated migration, and a reproducible Nexus performance baseline are implemented ([usage guide](docs/en/repository-guides/apt-debian.md), [Chinese design notes](docs/zh/dev/apt-debian-repository-design.md), [performance baseline](docs/en/dev/apt-performance-baseline.md))
-10. ✅ Conan 2 - Hosted/proxy/group, Conan bearer authentication, manifest-gated revision publication, write-time Nexus Browse projection, UI/API upload, Cleanup, composite package scanning, shape-gated migration, real Conan client E2E, and dual-database Nexus performance baselines are implemented ([usage guide](docs/en/repository-guides/conan-2.md), [Chinese design notes](docs/zh/dev/conan-repository-design.md), [performance baseline](docs/en/dev/conan-performance-baseline.md))
-11. ✅ Alpine / APK - Hosted/proxy/group, APK v2 package validation, signed immutable indexes, passthrough/verified re-sign proxying, ordered group source binding, UI/API upload, Browse/Search, Cleanup, scanning, shape-gated Nexus 3.94 migration, apk-tools 2.14/3.0 client E2E, and reproducible Nexus performance gates are implemented ([usage guide](docs/en/repository-guides/alpine-apk.md), [Chinese design notes](docs/zh/dev/alpine-apk-repository-design.md), [performance baseline](docs/en/dev/alpine-performance-baseline.md))
-12. ✅ Hugging Face Models - Models-only proxy repositories with commit-pinned metadata/files, server-side LFS/Xet bridging, real Hub/Transformers/Diffusers clients, multi-replica S3 coordination, scanning, Cleanup, and shape-gated Nexus migration ([usage guide](docs/en/repository-guides/hugging-face-models.md), [Chinese design notes](docs/zh/dev/hugging-face-models-repository-design.md), [performance baseline](docs/en/dev/hugging-face-models-performance-baseline.md)).
-13. ✅ R / CRAN - Hosted/proxy/group, bounded source-package validation, deterministic `PACKAGES.gz`, lazy verified proxying, snapshot-bound group resolution, UI/API upload, Browse/Search, Cleanup, partial-coverage scanning, shape-gated Nexus 3.94 migration, R 4.5/4.6 client E2E, indexed dual-database access, and reproducible Nexus performance gates are implemented ([usage guide](docs/en/repository-guides/r-cran.md), [Chinese design notes](docs/zh/dev/r-cran-repository-design.md), [performance baseline](docs/en/dev/r-cran-performance-baseline.md)).
-14. ✅ Go - Hosted/proxy/group recipes, Nexus-compatible module ZIP publication, official path/version/archive validation, ordered group aggregation, Cleanup, artifact scanning, UI/API upload, migration, real Go client E2E, Nexus 3.94 black-box comparison, and a reproducible performance baseline are implemented ([usage guide](docs/en/repository-guides/go.md), [performance baseline](docs/en/dev/go-hosted-performance-baseline.md)).
-15. ✅ OHPM / HarmonyOS - Hosted/proxy/group, normal and streaming HAR/HSP publication, verified caching, UI/API management, resumable independent import, and optional signed login are implemented. Real-client acceptance is included in the existing Full E2E matrix ([usage guide](docs/en/repository-guides/ohpm.md), [signed login](docs/en/dev/ohpm-login.md), [test coverage and limits](docs/en/dev/ohpm-acceptance.md)).
-16. ✅ Helm group repositories - Hosted, proxy, and nested group members are aggregated in configured order with first-member precedence, durable index caching, real Helm client coverage, and Nexus definition migration ([usage guide](docs/en/repository-guides/helm.md)).
-17. ✅ Git Large File Storage (LFS) - Hosted Batch/basic/verify, verified OSS/S3 streaming uploads, multi-replica publication, repository permissions, and shape-gated Nexus 3.94 migration are implemented; Git hosting, file locks, and automatic Cleanup are excluded ([usage guide](docs/en/repository-guides/git-lfs.md), [implementation design](docs/zh/dev/git-lfs-repository-design.md)).
-18. Eclipse p2 - Planned with Nexus-compatible proxy repositories for Eclipse and Equinox update sites.
-19. CocoaPods - Planned with Nexus-compatible proxy repositories for CocoaPods dependencies.
+| Platform capability | Delivered capability | Documentation |
+| --- | --- | --- |
+| PostgreSQL backend | MySQL and PostgreSQL backends with migration and multi-replica tests. | [database backend guide](docs/en/database-backends.md) · [Chinese design plan](docs/zh/dev/pluggable-database-access-layer-design.md) |
+| Artifact scanning | Per-repository asynchronous SBOM and vulnerability analysis with optional download enforcement. | [usage guide](docs/en/artifact-scanning-guide.md) · [Chinese design notes](docs/zh/dev/security-scanning-design.md) |
 
-Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token. OHPM clients use `GenericToken` as the raw Authorization value; RSA signed login is optional and disabled by default.
+<details>
+<summary>Repository format milestones (17)</summary>
+
+| Format | Delivered capability | Documentation |
+| --- | --- | --- |
+| Docker / OCI | Image push, pull, and upstream caching. | [implementation notes](docs/en/dev/docker-repository-implementation-plan.md) |
+| Cargo / Rust | Crate publishing, search, and Nexus repository migration. | [design notes](docs/en/dev/cargo-rust-repository-design.md) |
+| Dart / Pub | Package publishing, search, and Nexus migration verified with real clients. | [Chinese design notes](docs/zh/dev/dart-pub-repository-design.md) |
+| Composer / PHP | Composer 2 installs and migration of explicitly selected Nexus proxy caches. | [Chinese design notes](docs/zh/dev/composer-php-repository-design.md) |
+| Terraform | Module and provider registries with GPG signing for providers. | [Chinese design notes](docs/zh/dev/terraform-repository-design.md) |
+| Swift Package Registry | Signed, immutable releases verified with SwiftPM and Xcode. | [Chinese design notes](docs/zh/dev/swift-package-registry-design.md) |
+| Ansible Galaxy | Galaxy v3 collection publishing, dependency resolution, and multi-replica imports. | [usage guide](docs/en/repository-guides/ansible-galaxy.md) · [Chinese design notes](docs/zh/dev/ansible-galaxy-repository-design.md) |
+| Conda | Both Conda package formats with JSON, BZ2, and ZSTD repodata. | [Chinese design notes](docs/zh/dev/conda-repository-design.md) |
+| APT / Debian | Signed repository metadata verified with APT clients and a Nexus reference instance. | [usage guide](docs/en/repository-guides/apt-debian.md) · [Chinese design notes](docs/zh/dev/apt-debian-repository-design.md) · [performance baseline](docs/en/dev/apt-performance-baseline.md) |
+| Conan 2 | Revision publishing, cleanup, and composite package scanning. | [usage guide](docs/en/repository-guides/conan-2.md) · [Chinese design notes](docs/zh/dev/conan-repository-design.md) · [performance baseline](docs/en/dev/conan-performance-baseline.md) |
+| Alpine / APK | APK v2 validation, signed indexes, and proxy re-signing. | [usage guide](docs/en/repository-guides/alpine-apk.md) · [Chinese design notes](docs/zh/dev/alpine-apk-repository-design.md) · [performance baseline](docs/en/dev/alpine-performance-baseline.md) |
+| Hugging Face Models | Model downloads pinned to a commit, with LFS and Xet support. | [usage guide](docs/en/repository-guides/hugging-face-models.md) · [Chinese design notes](docs/zh/dev/hugging-face-models-repository-design.md) · [performance baseline](docs/en/dev/hugging-face-models-performance-baseline.md) |
+| R / CRAN | Per-directory PACKAGES.gz indexes for installation with R clients. | [usage guide](docs/en/repository-guides/r-cran.md) · [Chinese design notes](docs/zh/dev/r-cran-repository-design.md) · [performance baseline](docs/en/dev/r-cran-performance-baseline.md) |
+| Go | Validated module ZIP publication verified with the Go client. | [usage guide](docs/en/repository-guides/go.md) · [performance baseline](docs/en/dev/go-hosted-performance-baseline.md) |
+| OHPM / HarmonyOS | Streaming HAR/HSP publishing, resumable imports, and optional signed login. | [usage guide](docs/en/repository-guides/ohpm.md) · [signed login](docs/en/dev/ohpm-login.md) · [test coverage and limits](docs/en/dev/ohpm-acceptance.md) |
+| Helm groups | Chart indexes aggregated across nested groups in configured member order. | [usage guide](docs/en/repository-guides/helm.md) |
+| Git LFS | Batch operations, streaming uploads, and object verification with repository permissions. | [usage guide](docs/en/repository-guides/git-lfs.md) · [implementation design](docs/zh/dev/git-lfs-repository-design.md) |
+
+</details>
+
+[Full changelog](CHANGELOG.md)
 
 ## Who Is Using kkRepo?
 
-If your company, enterprise, or organization uses kkRepo, you are welcome to share your deployment in the [user registration issue](https://github.com/klboke/kkRepo/issues/94). This issue is for usage registration only; please use the regular issue templates for bug reports and feature requests.
+If your team uses kkRepo, share your organization's name and a little about how you use it in the [user registration issue](https://github.com/klboke/kkRepo/issues/94). For example, did you migrate from Nexus or set up your first private artifact repository? Your story helps teams evaluating kkRepo find a use case like their own and gives maintainers a clearer picture of who relies on the project and what they need.
+
+The registration issue is for adoption stories. For bugs and feature requests, please use the [issue templates](https://github.com/klboke/kkRepo/issues/new/choose).
 
 ## Contributing
 
@@ -252,31 +223,6 @@ If you find a security issue, follow [SECURITY.md](SECURITY.md) and report it th
 
 kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 
-## Documentation
+## Trademark Notice
 
-- [Development Guide](docs/en/development-guide.md)
-- [Build And Deployment Guide](docs/en/build-deployment-guide.md)
-- [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
-- [Cleanup Policy Guide](docs/en/cleanup-policy-guide.md)
-- [Browse Directory Deletion](docs/en/browse-directory-deletion.md)
-- [Admin Storage Usage](docs/en/admin-storage-usage.md)
-- [Repository Usage Guide](docs/en/repository-guides/README.md)
-- [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)
-- [Nginx Reverse Proxy Notes](docs/en/nginx-reverse-proxy.md)
-- [Architecture](docs/en/architecture.md)
-- [Compatibility Matrix](docs/en/compatibility-matrix.md)
-- [Troubleshooting Guide](docs/en/troubleshooting.md)
-- [Production Hardening Guide](docs/en/production-hardening.md)
-- [Backup And Restore Guide](docs/en/backup-restore.md)
-- [Security Model](docs/en/security-model.md)
-- [Content Selectors](docs/en/content-selectors.md)
-- [MySQL ER Design](docs/en/mysql-er.md)
-- [Database Backends](docs/en/database-backends.md)
-- [Database Schema](docs/en/database-schema.md)
-- [Nexus Migration Guide](docs/en/nexus-migration-guide.md)
-- [Nexus Migration Playbook](docs/en/migration-playbook.md)
-- [Monitoring And Observability Guide](docs/en/monitoring-observability-guide.md)
-- [Nexus Compatibility Testing](docs/en/nexus-compatibility-testing.md)
-- [FAQ](docs/en/faq.md)
-- [Why We Built kkRepo](docs/en/why-kkrepo.md)
-- [Changelog](CHANGELOG.md)
+Sonatype, Nexus, and Nexus Repository are trademarks of Sonatype, Inc. kkRepo is an independent open source project and is not affiliated with, endorsed by, sponsored by, or connected to Sonatype, Inc. References to Sonatype Nexus Repository are used only to describe compatibility, migration, or interoperability.
