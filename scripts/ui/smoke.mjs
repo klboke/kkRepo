@@ -89,9 +89,13 @@ try {
   const page = await browser.newPage();
   page.on("pageerror", error => pageErrors.push(error.message));
   await page.addInitScript(() => {
-    document.addEventListener("DOMContentLoaded", () => {
-      window.workspaceSwitchAnimated = Boolean(document.querySelector(".workspace-marker")?.getAnimations().length);
-    });
+    window.workspaceSwitchAnimated = false;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (...args) {
+      const animation = animate.apply(this, args);
+      if (this.classList.contains("workspace-marker")) window.workspaceSwitchAnimated = true;
+      return animation;
+    };
   });
   await page.goto(origin + "/browse/");
   await expect(page.locator("#welcome-view")).toBeVisible();
@@ -123,12 +127,12 @@ try {
   const workspaces = page.locator(".workspace-tabs");
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await workspaces.getByRole("link", { name: "Browse" }).click();
-  await expect(workspaces.getByRole("link", { current: "page" })).toHaveText("Browse");
+  await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Browse");
   await page.waitForLoadState("domcontentloaded");
   assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), true, "The active underline moves between workspaces");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await workspaces.getByRole("link", { name: "Admin" }).press("Enter");
-  await expect(workspaces.getByRole("link", { current: "page" })).toHaveText("Admin");
+  await expect(workspaces.locator('a[aria-current="page"]')).toHaveText("Admin");
   await page.waitForLoadState("domcontentloaded");
   assert.equal(await page.evaluate(() => window.workspaceSwitchAnimated), false, "Reduced motion switches immediately");
   await page.emulateMedia({ reducedMotion: "no-preference" });
