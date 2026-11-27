@@ -245,7 +245,8 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
       return Optional.of("nexus:settings:read");
     }
     if (path.equals("scanning") || path.startsWith("scanning/")) {
-      if (path.equals("scanning/waivers") && "POST".equals(method)) {
+      if ((path.equals("scanning/waivers") || path.equals("scanning/waivers/package"))
+          && "POST".equals(method)) {
         return Optional.of("nexus:security-scanning-waivers:create");
       }
       if (path.startsWith("scanning/waivers/") && "DELETE".equals(method)) {

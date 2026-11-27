@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerPath;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.security.scan.ScannerContract;
+import com.github.klboke.kkrepo.server.security.ApiKeyRotatedEvent;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,6 +38,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -114,11 +116,18 @@ public class DockerAuthService {
         subject.userId(),
         subject.realmId(),
         subject.apiKeyId(),
+        subject.apiKeyGeneration(),
         TokenKind.USER,
         granted.stream().map(Scope::toMap).toList(),
         stagingSession,
         expiresAt);
     return new TokenView(token, token, tokenTtlSeconds, issuedAt(expiresAt));
+  }
+
+  /** Bearer tokens issued from a key that was reset must not outlive the old secret. */
+  @EventListener
+  public void revokeTokensOf(ApiKeyRotatedEvent event) {
+    tokenDao.deleteByApiKeyId(event.apiKeyId());
   }
 
   @Transactional
@@ -163,6 +172,7 @@ public class DockerAuthService {
         tokenHash,
         SCANNER_SUBJECT_SOURCE,
         "scanner",
+        null,
         null,
         null,
         TokenKind.SECURITY_SCANNER,
@@ -350,7 +360,8 @@ public class DockerAuthService {
           permissionSubject));
     }
     Optional<AuthenticatedSubject> restored = authenticationService.authenticateStoredSubject(
-        row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId());
+        row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId(),
+        row.subjectApiKeyGeneration());
     if (restored.isEmpty()) {
       return restored;
     }

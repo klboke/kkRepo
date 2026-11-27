@@ -12,8 +12,29 @@ public interface DockerAuthTokenDao {
       String userId,
       String realmId,
       Long apiKeyId,
+      String apiKeyGeneration,
       TokenKind tokenKind,
       List<Map<String, Object>> scopes,
+      Instant expiresAt);
+
+  /**
+   * Same as {@link #insert}, but records both the API-key generation and the staging session an
+   * issued bearer is restricted to.
+   *
+   * <p>The generation invalidates the bearer when the key is reset on any replica; the staging
+   * session keeps it bound to the session even after the API key row is deleted by a concurrent
+   * cancel or rotation.
+   */
+  void insert(
+      String tokenHash,
+      String source,
+      String userId,
+      String realmId,
+      Long apiKeyId,
+      String apiKeyGeneration,
+      TokenKind tokenKind,
+      List<Map<String, Object>> scopes,
+      String stagingSession,
       Instant expiresAt);
 
   /**
@@ -56,12 +77,16 @@ public interface DockerAuthTokenDao {
    */
   int deleteExpired(Instant now, int maxItems);
 
+  /** Deletes every token issued from this API key or user token; returns the number deleted. */
+  int deleteByApiKeyId(long apiKeyId);
+
   record TokenRecord(
       String tokenHash,
       String subjectSource,
       String subjectUserId,
       String subjectRealmId,
       Long subjectApiKeyId,
+      String subjectApiKeyGeneration,
       TokenKind tokenKind,
       Map<String, Object> scopes,
       Instant expiresAt,
@@ -73,11 +98,25 @@ public interface DockerAuthTokenDao {
         String subjectUserId,
         String subjectRealmId,
         Long subjectApiKeyId,
+        String subjectApiKeyGeneration,
         TokenKind tokenKind,
         Map<String, Object> scopes,
         Instant expiresAt) {
       this(tokenHash, subjectSource, subjectUserId, subjectRealmId, subjectApiKeyId,
-          tokenKind, scopes, expiresAt, null);
+          subjectApiKeyGeneration, tokenKind, scopes, expiresAt, null);
+    }
+
+    public TokenRecord(
+        String tokenHash,
+        String subjectSource,
+        String subjectUserId,
+        String subjectRealmId,
+        Long subjectApiKeyId,
+        TokenKind tokenKind,
+        Map<String, Object> scopes,
+        Instant expiresAt) {
+      this(tokenHash, subjectSource, subjectUserId, subjectRealmId, subjectApiKeyId,
+          null, tokenKind, scopes, expiresAt, null);
     }
   }
 

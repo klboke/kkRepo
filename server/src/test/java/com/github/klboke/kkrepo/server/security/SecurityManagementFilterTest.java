@@ -39,6 +39,9 @@ class SecurityManagementFilterTest {
       "POST, /internal/security/scanning/policies, nexus:security-scanning:update",
       "DELETE, /internal/security/scanning/policies/1, nexus:security-scanning:update",
       "POST, /internal/security/scanning/waivers, nexus:security-scanning-waivers:create",
+      "POST, /internal/security/scanning/waivers/package, nexus:security-scanning-waivers:create",
+      "GET, /internal/security/scanning/waivers/package-context, nexus:security-scanning:read",
+      "POST, /internal/security/scanning/waivers/other, nexus:security-scanning:update",
       "DELETE, /internal/security/scanning/waivers/1, nexus:security-scanning-waivers:delete"
   })
   void scanReaderCanReadButCannotInvokeMutationEndpoints(

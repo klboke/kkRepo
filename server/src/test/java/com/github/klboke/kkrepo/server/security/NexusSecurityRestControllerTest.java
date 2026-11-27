@@ -964,6 +964,71 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void selfServiceUserTokenIsManagedOnlyFromASignedInSession() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var controller = new SecurityManagementController(new SecurityManagementService(dao));
+    AuthenticatedSubject session = subject("alice");
+    AuthenticatedSubject viaKey = new AuthenticatedSubject(
+        "Local", "alice", "local", 30L, new PermissionSubject("Local", "alice", Set.of(), null));
+    var userTokenCommand = new SecurityPayloads.ApiKeyCommand(
+        UserTokens.DOMAIN, null, null, "cli", null, List.of(), null, null, null);
+
+    ResponseStatusException createDenied = assertThrows(ResponseStatusException.class, () ->
+        controller.createCurrentApiKey(request(viaKey), userTokenCommand));
+    assertEquals(403, createDenied.getStatusCode().value());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").isEmpty());
+
+    var created = controller.createCurrentApiKey(request(session), userTokenCommand);
+    assertTrue(created.token().matches("[^:.]+:[^:]+"), created.token());
+    String hash = dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash();
+
+    long id = created.apiKey().id();
+    ResponseStatusException resetDenied = assertThrows(ResponseStatusException.class, () ->
+        controller.resetCurrentApiKey(request(viaKey), id));
+    assertEquals(403, resetDenied.getStatusCode().value());
+    assertEquals(hash, dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash());
+
+    var reset = controller.resetCurrentApiKey(request(session), id);
+    assertEquals(id, reset.apiKey().id());
+    assertNotEquals(created.token(), reset.token());
+    assertTrue(reset.token().matches("[^:.]+:[^:]+"), reset.token());
+
+    // Ordinary format tokens stay manageable with a key.
+    var nexus = controller.createCurrentApiKey(request(viaKey),
+        new SecurityPayloads.ApiKeyCommand("nexus", null, null, "ci", null, List.of(), null, null, null));
+    assertFalse(nexus.token().isBlank());
+    var nexusReset = controller.resetCurrentApiKey(request(viaKey), nexus.apiKey().id());
+    assertNotEquals(nexus.token(), nexusReset.token());
+  }
+
+  @Test
+  void administrativeApiKeyEndpointsNeverObtainOrSetAnotherUsersUserToken() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var service = new SecurityManagementService(dao);
+    var internal = new SecurityManagementController(service);
+    var nexus = new NexusSecurityRestController(service);
+    var token = new SecurityManagementController(service).createCurrentApiKey(request(subject("alice")),
+        new SecurityPayloads.ApiKeyCommand(UserTokens.DOMAIN, null, null, "cli", null, List.of(), null, null, null));
+    String hash = dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash();
+    String chosenHash = SecurityHashing.sha256("ABCDEFGHJK:" + "a".repeat(43));
+
+    for (String owner : List.of("alice", "bob")) {
+      for (String importedHash : new String[] {null, chosenHash}) {
+        assertEquals(403, assertThrows(ResponseStatusException.class, () -> internal.createApiKey(
+            new SecurityPayloads.ApiKeyCommand(UserTokens.DOMAIN, "Local", owner, null, null, List.of(), null, null,
+                importedHash))).getStatusCode().value(), owner);
+        assertEquals(403, assertThrows(ResponseStatusException.class, () -> nexus.createApiKey(
+            new NexusSecurityPayloads.NexusApiKeyCommand(UserTokens.DOMAIN, "Local", owner, null, null, Set.of(), null,
+                null, importedHash))).getStatusCode().value(), owner);
+      }
+    }
+    assertEquals(403, assertThrows(ResponseStatusException.class,
+        () -> nexus.resetApiKey(token.apiKey().id())).getStatusCode().value());
+    assertEquals(hash, dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "bob").isEmpty());
+  }
+
+  @Test
   void internalUiUsersDefaultToLocalSourceAndExposeCoreUiShape() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
@@ -1525,6 +1590,25 @@ class NexusSecurityRestControllerTest {
     assertEquals("DENY", response.getHeaders().getFirst("X-Frame-Options"));
     assertEquals(admin, authentication.storedSession);
     assertEquals(admin, request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE));
+  }
+
+  @Test
+  void raptureSessionCreateNeverOpensASessionForAnApiKeyOrUserToken() {
+    AuthenticatedSubject admin = subject("admin");
+    AuthenticatedSubject userToken = new AuthenticatedSubject(
+        "Local", "admin", "user-token", 30L, new PermissionSubject("Local", "admin", Set.of(), null));
+    StubAuthenticationService authentication = new StubAuthenticationService(
+        Optional.of(userToken),
+        Map.of(credentialsKey("admin", "old-password"), admin));
+    NexusRaptureSessionController controller = new NexusRaptureSessionController(authentication);
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class, () ->
+        controller.create(null, null, request(null)));
+    assertEquals(403, error.getStatusCode().value());
+    assertEquals(null, authentication.storedSession);
+
+    controller.create(base64("admin"), base64("old-password"), request(null));
+    assertEquals(admin, authentication.storedSession);
   }
 
   @Test

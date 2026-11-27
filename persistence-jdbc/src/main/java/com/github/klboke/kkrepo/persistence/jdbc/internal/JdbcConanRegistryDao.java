@@ -946,10 +946,10 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
     jdbc.update("""
         INSERT INTO conan_auth_token
           (token_hash, repository_id, subject_source, subject_user_id, realm_id, api_key_id,
-           expires_at, last_used_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           api_key_generation, expires_at, last_used_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, token.tokenHash(), token.repositoryId(), token.subjectSource(), token.subjectUserId(),
-        token.realmId(), token.apiKeyId(), timestamp(token.expiresAt()),
+        token.realmId(), token.apiKeyId(), token.apiKeyGeneration(), timestamp(token.expiresAt()),
         timestamp(token.lastUsedAt()), timestamp(token.createdAt()));
   }
 
@@ -966,6 +966,7 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
             rs.getString("subject_user_id"),
             rs.getString("realm_id"),
             nullableLong(rs, "api_key_id"),
+            rs.getString("api_key_generation"),
             nullableInstant(rs, "expires_at"),
             nullableInstant(rs, "last_used_at"),
             nullableInstant(rs, "created_at")),
@@ -989,6 +990,11 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
         LIMIT ?
         """, String.class, timestamp(now), page(limit));
     return deleteByValues("conan_auth_token", "token_hash", hashes);
+  }
+
+  @Override
+  public int deleteAuthTokensByApiKeyId(long apiKeyId) {
+    return jdbc.update("DELETE FROM conan_auth_token WHERE api_key_id = ?", apiKeyId);
   }
 
   @Override

@@ -95,6 +95,15 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 只向 hosted push；即使调用者已认证，proxy 和 group 仍是读取入口。
 
+CLI 和 CI 登录建议使用 user token，尤其是没有本地或 LDAP 密码的用户（OIDC 单点登录）。在 Browse 的 **My Token** 中选择 `UserToken` 域生成。与 Nexus user token 一样，它由 user code 和 passcode 组成，显示为 `<user code>:<passcode>`。用户名填写 user code，密码填写 passcode：
+
+```bash
+docker login nexus.example.com -u <user code>
+# Password: <passcode>
+```
+
+所有发送 HTTP Basic 凭据的客户端都可以使用这对凭据。user token 拥有所有者的角色，包括当前 LDAP 或 OIDC 角色映射为所有者最近一次登录时验证的组授予的角色。它不能打开 UI session，也不能作为 bearer 或 API key header 使用。每个用户只有一个 token，且只能由所有者在已登录的会话中通过 **My Token** 生成或重置。管理员可以在 API key 列表中查看其元数据（user code、时间）并删除它，之后由所有者重新生成；管理员不能为其他用户创建、导入或重置 user token。重置或删除后，由旧 token 签发的 Docker bearer token 在所有副本上立即失效。多副本部署时，请在所有副本升级完成后再签发 user token，参见[升级和回滚](../production-hardening.md#升级和回滚)。
+
 
 Browse 中复制的镜像引用只包含 registry 主机、可选端口、仓库路由路径、镜像名以及 tag 或 digest。
 `docker pull`、`docker tag` 和 `docker push` 参数不应包含 `http://`、`https://` 或 Registry API

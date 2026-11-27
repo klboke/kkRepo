@@ -6,6 +6,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverResult;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
 import jakarta.servlet.http.HttpServletRequest;
@@ -159,6 +161,36 @@ public class SecurityScanMutationService {
             "scopeType", waiver.scopeType(),
             "expiresAt", waiver.expiresAt() == null ? "none" : waiver.expiresAt().toString()));
     return waiver;
+  }
+
+  /** Audits every replaced and created waiver of a package waiver, like single operations. */
+  public PackageWaiverResult createPackageWaiver(
+      HttpServletRequest request,
+      AuthenticatedSubject actor,
+      PackageWaiverCommand command) {
+    PackageWaiverResult result = management.createPackageWaiver(actor, command);
+    for (ScanWaiver waiver : result.replaced()) {
+      audit.record(
+          request,
+          actor,
+          "WAIVER_DELETE",
+          waiver.repositoryId(),
+          Map.of("waiverId", waiver.id(), "replacedBy", "PACKAGE_WAIVER"));
+    }
+    for (ScanWaiver waiver : result.created()) {
+      audit.record(
+          request,
+          actor,
+          "WAIVER_CREATE",
+          waiver.repositoryId(),
+          Map.of(
+              "waiverId", waiver.id(),
+              "scopeType", waiver.scopeType(),
+              "packageSelector", waiver.packageSelector(),
+              "replacedWaivers", result.replaced().size(),
+              "expiresAt", waiver.expiresAt() == null ? "none" : waiver.expiresAt().toString()));
+    }
+    return result;
   }
 
   public ScanWaiver deleteWaiver(

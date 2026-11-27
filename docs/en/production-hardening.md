@@ -244,6 +244,8 @@ Recommended rollout:
 3. Roll through remaining replicas.
 4. Keep the previous artifact/image available for rollback.
 
+CLI user tokens: start issuing them (Browse > **My Token**, `UserToken` domain) only after every replica runs a version that supports them. A replica on an older version does not restrict a user token to HTTP Basic, and it ignores the key generation that makes a reset revoke Docker and Conan bearer tokens on every replica. The same applies after a rollback: delete existing user tokens before or right after you roll back.
+
 If database migrations have run, rollback may require database restore rather than only redeploying the old image. See [Database Backends](database-backends.md) for backend-specific recovery commands.
 
 ## Security Disclosure And Public Logs
