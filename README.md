@@ -15,7 +15,7 @@ Use it to publish private packages, cache upstream dependencies, or migrate exis
 
 [Why kkRepo?](docs/en/why-kkrepo.md) · [Quick start](#quick-start) · [Supported repositories](#supported-repositories) · [Core features](#core-features) · [Migrate from Nexus](#migrating-from-sonatype-nexus-repository) · [Production deployment](docs/en/build-deployment-guide.md)
 
-![Artifact path, checksums, and client usage in the repository browser](docs/img/img_1.png)
+![kkRepo welcome page showing 24 repository formats and their supported repository types](docs/img/browse-welcome.png)
 
 ## Quick Start
 
@@ -107,6 +107,8 @@ When the kkRepo team migrated its own repositories, it kept the original domain.
 
 <details>
 <summary>More screenshots from Browse and Admin</summary>
+
+![Artifact path, checksums, and client usage in the repository browser](docs/img/img_1.png)
 
 ![User repository list](docs/img/img_7.png)
 

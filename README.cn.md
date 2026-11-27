@@ -15,7 +15,7 @@ kkRepo 是一个由社区驱动的开源、自托管制品仓库，旨在解决 
 
 [为什么开发 kkRepo](docs/zh/why-kkrepo.md) · [快速开始](#快速开始) · [支持的仓库](#支持的仓库) · [核心特性](#核心特性) · [从 Nexus 迁移](#从-sonatype-nexus-repository-迁移) · [生产部署](docs/zh/build-deployment-guide.md)
 
-![在 Browse 中查看制品的仓库路径、校验和及客户端用法](docs/img/img_1.png)
+![kkRepo 欢迎页展示 24 种制品格式及各自支持的仓库类型](docs/img/browse-welcome.png)
 
 ## 快速开始
 
@@ -107,6 +107,8 @@ kkRepo 团队迁移自己的制品仓库时保留了原域名，切换后 CI 继
 
 <details>
 <summary>更多 Browse 和 Admin 界面截图</summary>
+
+![在 Browse 中查看制品的仓库路径、校验和及客户端用法](docs/img/img_1.png)
 
 ![前台仓库列表](docs/img/img_7.png)
 
