@@ -77,6 +77,8 @@
   #repositories-view .action-bar .select-filter { flex: 1 1 120px; }
   #repositories-view .column-choice { min-height: 32px; }
   #repositories-view .usage-table .icon-column { display: none; }
+  #repositories-view .usage-table .actions-column { width: 1%; min-width: 0; }
+  #repositories-view .usage-table .actions-column .row-action { margin-inline: 0; }
   #repositories-view .usage-table :is(td,th) { padding-inline: 6px; }
   #repositories-view .usage-overview, #repositories-view .fixed-table-frame { margin-inline: var(--console-gutter); }
 }

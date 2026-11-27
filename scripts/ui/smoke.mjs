@@ -69,6 +69,14 @@ try {
   await expect(page.locator("#repositories-view")).toBeVisible();
   await verifyEntryAssets(page, "admin");
   const edit = page.locator('.edit-repository-button[data-name="' + repo + '"]');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const nav = page.locator("#navigation-toggle");
+  await nav.click();
+  await expect(page.locator("#workspace-navigation")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(nav).toBeFocused();
+  assert.ok(await page.locator(".nx-topbar").evaluate(bar => bar.clientHeight < 120),
+    "The mobile header leaves room for repository rows");
   await page.setViewportSize({ width: 1024, height: 768 });
   const table = page.locator("#repositories-view .fixed-table-frame");
   await expect(edit).toBeVisible();

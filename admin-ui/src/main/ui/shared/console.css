@@ -166,7 +166,19 @@
 .navigation-toggle { display: none; }
 @media (max-width: 760px) {
   .nx-shell { grid-template: auto minmax(0,1fr) / minmax(0,1fr); height: 100dvh; min-height: 0; overflow: hidden; }
-  .nx-shell .nx-topbar { grid-column: 1; grid-row: 1; min-width: 0; height: auto; align-items: center; gap: 6px; padding: 5px 10px; flex-wrap: wrap; }
+  .nx-shell .nx-topbar {
+    display: grid;
+    grid-template-columns: 32px 34px minmax(0,1fr) auto;
+    grid-template-areas: "navigation logo workspaces account" "search search search search";
+    grid-column: 1; grid-row: 1; min-width: 0; height: auto; align-items: center; gap: 5px 8px; padding: 6px 10px;
+  }
+  .nx-topbar .navigation-toggle { grid-area: navigation; }
+  .nx-topbar .product { grid-area: logo; }
+  .nx-topbar .workspace-tabs { grid-area: workspaces; justify-self: start; width: auto; }
+  .nx-topbar :is(.user-menu,.account-login) { grid-area: account; justify-self: end; }
+  .nx-topbar .user-menu-trigger { min-width: 0; max-width: 80px; padding-inline: 5px; }
+  .nx-topbar .global-component-search { grid-area: search; margin: 0; max-width: none; width: 100%; }
+  .nx-topbar .global-component-search input { height: 32px; }
   .nx-topbar .navigation-toggle {
     display: inline-grid; flex: none; width: 32px; height: 32px; place-items: center;
     border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink-1); cursor: pointer;
