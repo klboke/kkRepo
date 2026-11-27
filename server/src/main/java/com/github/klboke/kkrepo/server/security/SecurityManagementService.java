@@ -1035,6 +1035,14 @@ public class SecurityManagementService implements AccessDecisionService {
         null);
   }
 
+  /** Creates a new token without reusing an existing token in the same domain/owner pair. */
+  @Transactional
+  public CreatedApiKeyView createApiKeyForOwnerUncached(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
+    return writeApiKey(
+        ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.CREATE_ONLY);
+  }
+
   /** Administrative reset; administrators may revoke another user's token, but never obtain it. */
   @Transactional
   public CreatedApiKeyView resetApiKey(long id) {

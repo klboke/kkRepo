@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.routing.builtin;
 import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.security.ClientAddress;
+import com.github.klboke.kkrepo.server.staging.StagingHttpSupport;
+import com.github.klboke.kkrepo.server.staging.StagingSelector;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -72,6 +74,7 @@ import com.github.klboke.kkrepo.server.pypi.PypiResponse;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.pub.PubGroupService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
+import com.github.klboke.kkrepo.server.pub.PubStagingService;
 import com.github.klboke.kkrepo.server.pub.PubProxyService;
 import com.github.klboke.kkrepo.server.raw.RawGroupService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
@@ -165,6 +168,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   private final CargoProxyService cargoProxy;
   private final CargoGroupService cargoGroup;
   private final PubHostedService pubHosted;
+  private PubStagingService pubStaging;
   private final PubProxyService pubProxy;
   private final PubGroupService pubGroup;
   private final ComposerHostedService composerHosted;
@@ -186,6 +190,8 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   private final RawHostedService rawHosted;
   private final RawProxyService rawProxy;
   private final RawGroupService rawGroup;
+  private StagingHttpSupport stagingHttp;
+  private com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget;
   private final ObjectMapper objectMapper;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final MavenPathParser parser = new MavenPathParser();
@@ -245,6 +251,22 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   @Autowired(required = false)
   public void setHuggingFaceService(HuggingFaceService huggingFace) {
     this.huggingFace = huggingFace;
+  }
+
+  @Autowired(required = false)
+  public void setStagingHttpSupport(StagingHttpSupport stagingHttp) {
+    this.stagingHttp = stagingHttp;
+  }
+
+  @Autowired(required = false)
+  public void setPubStagingService(PubStagingService pubStaging) {
+    this.pubStaging = pubStaging;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  public void setGroupWriteTargetService(
+      com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget) {
+    this.groupWriteTarget = groupWriteTarget;
   }
 
   @Autowired
@@ -388,6 +410,13 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   @Override
   public ResponseEntity<?> handle(RepositoryProtocolRequest request)
       throws IOException, ServletException {
+    if (stagingHttp != null) {
+      Optional<ResponseEntity<?>> staged = stagingHttp.dispatch(
+          request.runtime(), request.path(), request.servletRequest());
+      if (staged.isPresent()) {
+        return staged.get();
+      }
+    }
     return switch (request.method().name()) {
       case "GET" -> get(request.runtime(), request.repositoryName(), request.servletRequest());
       case "HEAD" -> head(request.runtime(), request.repositoryName(), request.servletRequest());
@@ -537,6 +566,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       HttpServletRequest request,
       String contentType)
       throws IOException, ServletException {
+    runtime = writeRuntime(runtime);
     String userId = requestUserId(request);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
@@ -749,6 +779,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
 
   private ResponseEntity<?> delete(
       RepositoryRuntime runtime, String name, HttpServletRequest request) throws IOException {
+    runtime = writeRuntime(runtime);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
       if (NpmTokenService.isLogoutPath(rawPath)) {
@@ -844,6 +875,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
 
   private ResponseEntity<?> post(
       RepositoryRuntime runtime, String name, HttpServletRequest request) {
+    runtime = writeRuntime(runtime);
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
       String raw = extractRepositoryPath(name, request, true);
       try (InputStream body = request.getInputStream()) {
@@ -1447,6 +1479,18 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
           yield pubHosted.initPublish(runtime, baseUrl, requestUserId(request), requestApiKeyId(request), headOnly);
         }
         if (path.kind() == PubPath.Kind.PUBLISH_FINALIZE) {
+          String stagingSession = StagingSelector.resolve(request);
+          if (stagingSession != null && pubStaging == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "Staging is unavailable");
+          }
+          if (pubStaging != null && stagingSession != null) {
+            yield pubStaging.finalizeStaged(
+                runtime, path.sessionId(), stagingSession, requestUserId(request),
+                requestApiKeyId(request), ClientAddress.from(request),
+                requestPermissionSubject(request), headOnly);
+          }
           yield pubHosted.finalizeUpload(runtime, path.sessionId(), requestUserId(request),
               requestApiKeyId(request), request.getHeader(HttpHeaders.USER_AGENT), headOnly);
         }
@@ -1611,6 +1655,13 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
 
   private MavenResponse npmWhoami(HttpServletRequest request, boolean headOnly) {
     return npmJson(Map.of("username", requestUserId(request)), headOnly);
+  }
+
+  private RepositoryRuntime writeRuntime(RepositoryRuntime runtime) {
+    if (runtime.isGroup() && groupWriteTarget != null) {
+      return groupWriteTarget.requireWriteTarget(runtime);
+    }
+    return runtime;
   }
 
   private String requestUserId(HttpServletRequest request) {

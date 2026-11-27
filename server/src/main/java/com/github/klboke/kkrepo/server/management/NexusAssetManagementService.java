@@ -229,6 +229,96 @@ public class NexusAssetManagementService {
     return response.status();
   }
 
+  @Transactional(readOnly = true)
+  public ComponentPage components(
+      String repositoryName, String continuationToken, HttpServletRequest request) {
+    if (repositoryName == null || repositoryName.isBlank()) {
+      throw new InvalidSearchRequestException("repository is required for component search");
+    }
+    authorizer.requireSearch(request);
+    RepositoryRecord repository = repositoryDao.findByName(repositoryName)
+        .orElseThrow(AssetNotFoundException::new);
+    if (repository.type() == RepositoryType.GROUP) {
+      throw new InvalidSearchRequestException(
+          "Component search does not support group repositories");
+    }
+    long afterComponentId = 0;
+    if (continuationToken != null && !continuationToken.isBlank()) {
+      DecodedContinuation continuation = idCodec.decodeContinuation(continuationToken);
+      if (continuation.repositoryId() != repository.id()) {
+        throw new InvalidSearchRequestException("continuationToken belongs to another repository");
+      }
+      afterComponentId = continuation.lastAssetId();
+    }
+    NexusComponentIdCodec componentIds = new NexusComponentIdCodec();
+    List<ComponentSummaryView> items = new ArrayList<>(PAGE_SIZE);
+    long last = afterComponentId;
+    final long cursor = afterComponentId;
+    List<ComponentRecord> components = componentDao.listByRepositoryId(repository.id()).stream()
+        .filter(component -> component.id() != null && component.id() > cursor)
+        .sorted(java.util.Comparator.comparingLong(ComponentRecord::id))
+        .toList();
+    for (ComponentRecord component : components) {
+      ComponentSummaryView view = component(repository, component, request, componentIds);
+      if (view != null) {
+        items.add(view);
+        last = component.id();
+      }
+      if (items.size() == PAGE_SIZE) break;
+    }
+    String next = components.size() > items.size()
+        ? idCodec.encodeContinuation(repository.id(), last) : null;
+    return new ComponentPage(List.copyOf(items), next);
+  }
+
+  @Transactional(readOnly = true)
+  public ComponentSummaryView getComponent(String id, HttpServletRequest request) {
+    NexusComponentIdCodec componentIds = new NexusComponentIdCodec();
+    NexusComponentIdCodec.Decoded decoded;
+    try {
+      decoded = componentIds.decode(id);
+    } catch (NexusComponentIdCodec.InvalidComponentIdException error) {
+      throw new AssetNotFoundException();
+    }
+    RepositoryRecord repository = repositoryDao.findByName(decoded.repositoryName())
+        .orElseThrow(AssetNotFoundException::new);
+    ComponentRecord component = componentDao.findById(decoded.componentId())
+        .filter(candidate -> candidate.repositoryId() == repository.id())
+        .orElseThrow(AssetNotFoundException::new);
+    authorizer.requireRepositoryAction(
+        request, repository, null, PermissionAction.READ);
+    ComponentSummaryView view = component(repository, component, request, componentIds);
+    if (view == null) throw new AssetNotFoundException();
+    return view;
+  }
+
+  private ComponentSummaryView component(
+      RepositoryRecord repository,
+      ComponentRecord component,
+      HttpServletRequest request,
+      NexusComponentIdCodec componentIds) {
+    List<AssetSummaryView> assets = new ArrayList<>();
+    for (AssetRecord asset : assetDao.listAssetsByComponent(component.id())) {
+      if (!authorizer.repositoryActionAllowed(
+          request, repository, asset.path(), PermissionAction.BROWSE)) {
+        continue;
+      }
+      AssetBlobRecord blob = asset.assetBlobId() == null
+          ? null : assetDao.findBlobById(asset.assetBlobId()).orElse(null);
+      assets.add(toSummary(repository, new AssetWithBlob(asset, blob), request));
+    }
+    if (assets.isEmpty()) return null;
+    return new ComponentSummaryView(
+        componentIds.encode(repository.name(), component.id()),
+        repository.name(),
+        repository.format().id(),
+        component.namespace(),
+        component.name(),
+        component.version(),
+        component.kind(),
+        List.copyOf(assets));
+  }
+
   private AssetSummaryView toSummary(
       RepositoryRecord repository, AssetWithBlob stored, HttpServletRequest request) {
     AssetRecord asset = stored.asset();
@@ -357,6 +447,22 @@ public class NexusAssetManagementService {
     return asset.id() != null
         && asset.repositoryId() == repository.id()
         && asset.format() == repository.format();
+  }
+
+  public record ComponentPage(
+      List<ComponentSummaryView> items,
+      @JsonInclude(JsonInclude.Include.ALWAYS) String continuationToken) {
+  }
+
+  public record ComponentSummaryView(
+      String id,
+      String repository,
+      String format,
+      String group,
+      String name,
+      String version,
+      String kind,
+      List<AssetSummaryView> assets) {
   }
 
   public record AssetSummaryView(

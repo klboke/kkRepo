@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
@@ -177,9 +178,10 @@ class ApiKeyRotationAcrossReplicasTest {
       dockerRows.put(call.getArgument(0), new DockerAuthTokenDao.TokenRecord(
           call.getArgument(0), call.getArgument(1), call.getArgument(2), call.getArgument(3),
           call.getArgument(4), call.getArgument(5), TokenKind.USER,
-          Map.of("scopes", call.getArgument(7)), call.getArgument(8)));
+          Map.of("scopes", call.getArgument(7)), call.getArgument(9), call.getArgument(8)));
       return null;
-    }).when(tokens).insert(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }).when(tokens).insert(anyString(), anyString(), anyString(), anyString(), any(), anyString(),
+        any(TokenKind.class), anyList(), any(), any(Instant.class));
     when(tokens.findValid(anyString(), any()))
         .thenAnswer(call -> Optional.ofNullable(dockerRows.get(call.<String>getArgument(0))));
     when(tokens.deleteByApiKeyId(anyLong())).thenAnswer(call -> {
