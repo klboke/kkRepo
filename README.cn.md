@@ -74,32 +74,34 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ## 支持能力
 
-| 格式 | 仓库类型 | 客户端发布/上传 | 浏览和搜索 | Nexus 迁移 |
-| --- | --- | --- | --- | --- |
-| Maven | hosted / proxy / group | 支持 Maven deploy、PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| npm | hosted / proxy / group | 支持 `npm publish`、dist-tag 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| OHPM / HarmonyOS | hosted / proxy / group | `ohpm publish`、`ohpm install`、普通/流式 HAR/HSP、tag、下架及 UI/API 上传（[使用指南](docs/zh/repository-guides/ohpm.md)） | 支持包/版本 metadata、校验和、Browse/Search 和 Usage | 支持目录/已有仓库独立导入、dry-run、校验和及断点恢复；不属于 Nexus 迁移格式 |
-| PyPI | hosted / proxy / group | 支持 twine 上传和管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Go | hosted / proxy / group | 支持 Nexus 兼容的 `<version>.zip` PUT 与 UI/API 上传；Go 客户端可通过同一 group 解析私有 hosted 和公共 proxy module | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Helm | hosted / proxy / group | 支持 chart push、PUT 上传、有序 group 解析和管理台上传 | 支持 index.yaml 聚合 | 默认迁移 hosted；proxy 可选；group definition 支持迁移 |
-| Cargo / Rust | hosted / proxy / group | 支持 `cargo publish`、yank/unyank、`CargoToken` 认证和 UI/API `.crate` 上传 | 支持 sparse index 和 `cargo search` | 支持 Cargo 仓库迁移 |
-| Dart / Pub | hosted / proxy / group | 支持 `dart pub publish`、`dart pub get`、`flutter pub get`、`PubToken` 认证和 UI/API `.tar.gz` 上传 | 支持 package/version metadata、archive 属性和 Pub 搜索 | 支持 Nexus 3.92.0 Pub hosted 迁移，以及显式选择的 proxy cache 迁移 |
-| Composer / PHP | hosted / proxy / group | Composer 没有标准 publish 命令；支持 Components API 和 UI 上传 zip/tar archive，并通过 Composer 2 安装 | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer proxy 配置可迁移；cache 仅在管理员显式选择且 source profile 证明后迁移 |
-| Terraform Provider / Module Registry | hosted / proxy / group | 支持 Nexus 兼容 PUT 和 UI/API archive 上传；`terraform init` 可通过 group 解析 hosted 与 proxy module/provider | 支持 module/provider coordinate、version、platform、Browse/Search 和 Usage | 支持 Nexus Terraform hosted 数据和显式选择的 proxy archive cache 迁移；同时迁移 proxy/group 配置 |
-| Swift Package Registry | hosted / proxy / group | 支持 `swift package-registry publish`、Basic/Bearer 登录和 UI/API source archive 上传 | 支持 Registry v1 release/manifest/archive 元数据、Browse/Search 和 Usage | 仅已验证 Nexus 3.92.x-3.94.x datastore shape 可规划为 `FULL`；shape 漂移或 proxy secret 不可用时需人工处理 |
-| Ansible Galaxy | hosted / proxy / group | 支持 `ansible-galaxy collection publish`、Nexus 兼容 raw PUT、route-scoped Base64 Bearer/Ansible 2.9 Token 凭据、GenericToken 和 UI/API collection 上传（[使用指南](docs/zh/repository-guides/ansible-galaxy.md)） | 支持 Galaxy v3 collection/version/artifact 元数据、依赖、Browse/Search 和 Usage | 支持 Nexus 3.93.x-3.94.x 仓库定义与 shape-gated hosted/proxy collection 数据迁移；未知 datastore shape 失败关闭 |
-| Conda | hosted / proxy / group | 支持 Nexus 兼容 raw PUT，以及 `.tar.bz2`/`.conda` 的 UI/API 上传 | 支持 channel/subdir 元数据、JSON/BZ2/ZSTD repodata、channeldata、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package 数据迁移；生成元数据在目标端重建 |
-| APT / Debian | hosted / proxy | 支持 Nexus 兼容仓库根 POST、Components API/UI `.deb` 上传，以及真实 `apt update`、下载、安装和升级（[使用指南](docs/zh/repository-guides/apt-debian.md)） | 支持签名 Packages/Release 元数据、by-hash、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package；签名私钥需显式导入后才启用迁移仓库 |
-| Conan 2 | hosted / proxy / group | 支持 `conan upload`、Conan bearer 登录和 UI/API revision file 上传（[使用指南](docs/zh/repository-guides/conan-2.md)） | 支持 RREV/PREV 元数据、写入时固定的 Nexus 对齐 Browse 路径、Search 和 Usage | 支持 Nexus 3.94 仓库定义，以及 shape-gated hosted/显式选择 proxy cache revision；Conan 1 和未知 shape 失败关闭 |
-| Alpine / APK | hosted / proxy / group | 支持规范 APK v2 PUT 与 UI/Components API 上传，以及真实 `apk update`、search、policy、fetch、install 和 upgrade（[使用指南](docs/zh/repository-guides/alpine-apk.md)） | 支持签名 `APKINDEX.tar.gz`、passthrough/验签后 re-sign proxy、有序 group source binding、Browse/Search 和 Usage | 支持 Nexus 3.94 definition 与 shape-gated hosted package；生成 index 在目标端重建，signing key 或 proxy secret 不可用时 fail closed |
-| R / CRAN | hosted / proxy / group | 支持规范 source `.tar.gz` PUT 与 UI/Components API 上传，以及真实 `available.packages()`、安装和更新（[使用指南](docs/zh/repository-guides/r-cran.md)） | 支持确定性 `PACKAGES.gz`、任意文件 proxy、snapshot-bound group、Browse/Search、Cleanup、扫描和 Usage | 支持 Nexus 3.94 definition 与 shape-gated hosted source package；生成 index 和 binding 在目标端重建 |
-| Hugging Face Models | proxy | 支持通过 `HF_ENDPOINT` 使用 `hf download`、`hf_hub_download`、`snapshot_download`、Transformers 与 Diffusers（[使用指南](docs/zh/repository-guides/hugging-face-models.md)） | 支持 commit-pinned 模型 metadata/file、服务端 LFS/Xet bridge、Browse/Search、Cleanup 和扫描 | 识别 Nexus 3.77+ definition；显式选择的 Nexus 3.94 proxy cache 按 shape gate，未知身份失败关闭 |
-| Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
-| NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Git LFS | hosted | Git LFS 批量上传/下载、Basic 和 GenericToken（[使用指南](docs/zh/repository-guides/git-lfs.md)） | 支持 OID、大小、校验和、Browse/Search | 验证 OID/大小/校验和数据结构后，支持 Nexus 3.94.x hosted 内容逐对象导入与恢复 |
-| Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
+| 格式 | Hosted | Proxy | Group | [Nexus 迁移](docs/zh/nexus-migration-guide.md) |
+| :--- | :---: | :---: | :---: | :---: |
+| [Maven](docs/zh/repository-guides/maven.md) | ✓ | ✓ | ✓ | ✓ |
+| [npm](docs/zh/repository-guides/npm.md) | ✓ | ✓ | ✓ | ✓ |
+| [OHPM / HarmonyOS](docs/zh/repository-guides/ohpm.md) | ✓ | ✓ | ✓ | ✗ |
+| [PyPI](docs/zh/repository-guides/pypi.md) | ✓ | ✓ | ✓ | ✓ |
+| [Go](docs/zh/repository-guides/go.md) | ✓ | ✓ | ✓ | ✓ |
+| [Helm](docs/zh/repository-guides/helm.md) | ✓ | ✓ | ✓ | ✓ |
+| [Cargo / Rust](docs/zh/repository-guides/cargo-rust.md) | ✓ | ✓ | ✓ | ✓ |
+| [Dart / Pub](docs/zh/repository-guides/dart-pub.md) | ✓ | ✓ | ✓ | ✓ |
+| [Composer / PHP](docs/zh/repository-guides/composer-php.md) | ✓ | ✓ | ✓ | ✓ |
+| [Terraform Provider / Module Registry](docs/zh/repository-guides/terraform.md) | ✓ | ✓ | ✓ | ✓ |
+| [Swift Package Registry](docs/zh/repository-guides/swift-package-registry.md) | ✓ | ✓ | ✓ | ✓ |
+| [Ansible Galaxy](docs/zh/repository-guides/ansible-galaxy.md) | ✓ | ✓ | ✓ | ✓ |
+| [Conda](docs/zh/repository-guides/conda.md) | ✓ | ✓ | ✓ | ✓ |
+| [APT / Debian](docs/zh/repository-guides/apt-debian.md) | ✓ | ✓ | ✗ | ✓ |
+| [Conan 2](docs/zh/repository-guides/conan-2.md) | ✓ | ✓ | ✓ | ✓ |
+| [Alpine / APK](docs/zh/repository-guides/alpine-apk.md) | ✓ | ✓ | ✓ | ✓ |
+| [R / CRAN](docs/zh/repository-guides/r-cran.md) | ✓ | ✓ | ✓ | ✓ |
+| [Hugging Face Models](docs/zh/repository-guides/hugging-face-models.md) | ✗ | ✓ | ✗ | ✓ |
+| [Docker / OCI](docs/zh/repository-guides/docker-oci.md) | ✓ | ✓ | ✓ | ✓ |
+| [NuGet](docs/zh/repository-guides/nuget.md) | ✓ | ✓ | ✓ | ✓ |
+| [RubyGems](docs/zh/repository-guides/rubygems.md) | ✓ | ✓ | ✓ | ✓ |
+| [Yum](docs/zh/repository-guides/yum.md) | ✓ | ✓ | ✓ | ✓ |
+| [Git LFS](docs/zh/repository-guides/git-lfs.md) | ✓ | ✗ | ✗ | ✓ |
+| [Raw](docs/zh/repository-guides/raw.md) | ✓ | ✓ | ✓ | ✓ |
+
+Nexus 迁移列的 ✓ 表示该格式有受支持的迁移路径。适用的仓库类型、数据范围和 Nexus 版本见迁移指南。
 
 ## 从 Sonatype Nexus Repository 迁移
 
