@@ -30,3 +30,32 @@ test("asset download links ignore non-string or empty targets", () => {
   assert.equal(render(null), "");
   assert.equal(render({ href: "/repository/raw/archive.zip" }), "");
 });
+
+test("a published index can be downloaded and its public URL copied even when attributes are unavailable", async () => {
+  const entry = { name: "PACKAGES.gz", path: "src/contrib/PACKAGES.gz", readOnly: true,
+    downloadUrl: "/repository/r/src/contrib/PACKAGES.gz" };
+  const publicUrl = "https://example.test" + entry.downloadUrl;
+  let onCopy;
+  let copied;
+  const button = { addEventListener: (_, listener) => { onCopy = listener; } };
+  const mount = { querySelector: selector => ({
+    ".download-copy": button, ".download-row a": { href: publicUrl },
+  }[selector]) };
+  const context = declarations.context({
+    detailPaneMount: () => mount, fetchAssetAttributes: async () => null,
+    currentRepository: () => ({ format: "r" }), isDockerDetail: () => false,
+    iconForFile: () => "", lucideIcon: () => "", detailCrumb: () => "",
+    canDeleteBrowseContent: () => true, renderGenericAssetSummaryPanel: () => "",
+    renderAttributesSection: () => "", renderUsageSection: () => "",
+    bindDeleteControl: (_, target) => assert.equal(target, null),
+    copyWithFeedback: (_, url) => { copied = url; },
+  });
+  vm.runInContext(declarations("showAssetDetail", "detailHead", "renderAssetDownloadLink", "escapeHtml"), context);
+
+  await context.showAssetDetail(entry);
+  assert.doesNotMatch(mount.innerHTML, /browse-delete-button/);
+  assert.match(mount.innerHTML, /href="\/repository\/r\/src\/contrib\/PACKAGES.gz"/);
+  assert.match(mount.innerHTML, /aria-label="Copy URL"/);
+  onCopy();
+  assert.equal(copied, publicUrl);
+});

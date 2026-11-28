@@ -636,6 +636,9 @@ public class BrowseContentDeleteController {
       String publicPath,
       String storagePath,
       String actorId) {
+    if (RHostedBrowseIndexes.indexNamespace(publicPath).isPresent()) {
+      throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED, "Published R indexes are read-only");
+    }
     if (runtimeRegistry == null || rService == null) {
       throw new ResponseStatusException(
           HttpStatus.SERVICE_UNAVAILABLE, "R delete service is unavailable");

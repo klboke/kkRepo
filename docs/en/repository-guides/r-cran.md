@@ -85,6 +85,10 @@ The upload advances a durable namespace revision. A fenced publisher writes a by
 `PACKAGES.gz` snapshot and atomically makes it current. Readers see either the previous complete
 snapshot or the new complete snapshot, never a partially rebuilt index.
 
+In a hosted repository, open the package directory in Browse or HTML View to find the published
+`PACKAGES.gz`. Select it in Browse to check its size and checksums, copy its URL, or download it.
+The index is read-only and updates when packages change.
+
 ## Publish binary packages
 
 | Package | Directory | Extension |

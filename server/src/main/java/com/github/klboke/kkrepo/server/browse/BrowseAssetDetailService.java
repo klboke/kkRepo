@@ -200,8 +200,20 @@ public class BrowseAssetDetailService {
       }
       rejectSwiftTombstoneForPhysicalPath(visibleRepository, publicPath, sourceRepositoryName);
     }
-    ResolvedStoragePath resolvedPath = storagePath(
-        visibleRepository, publicPath, sourceRepositoryName);
+    Optional<String> indexNamespace = RHostedBrowseIndexes.isHostedR(visibleRepository)
+        ? RHostedBrowseIndexes.indexNamespace(publicPath) : Optional.empty();
+    ResolvedStoragePath resolvedPath;
+    if (indexNamespace.isPresent()) {
+      if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()
+          && !visibleRepository.name().equals(sourceRepositoryName)) {
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Source repository not found");
+      }
+      String hidden = RHostedBrowseIndexes.publishedPath(rDao, visibleRepository.id(), indexNamespace.orElseThrow())
+          .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "R index not published"));
+      resolvedPath = new ResolvedStoragePath(hidden, visibleRepository.name());
+    } else {
+      resolvedPath = storagePath(visibleRepository, publicPath, sourceRepositoryName);
+    }
     String storagePath = resolvedPath.path();
     sourceRepositoryName = resolvedPath.sourceRepositoryName();
     if (isTerraformProviderVersionsDocument(visibleRepository, publicPath)) {
@@ -246,9 +258,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> alpine = source.format() == RepositoryFormat.ALPINE
         ? alpineAttributes(source, asset)
         : Map.of();
-    Map<String, Object> r = source.format() == RepositoryFormat.R
-        ? rAttributes(source, asset)
-        : Map.of();
+    Map<String, Object> r = indexNamespace.isPresent()
+        ? Map.of("namespace", indexNamespace.orElseThrow(), "generated", true)
+        : source.format() == RepositoryFormat.R ? rAttributes(source, asset) : Map.of();
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
@@ -269,8 +281,8 @@ public class BrowseAssetDetailService {
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.CONFLICT, "Conan Browse asset is missing its typed identity"));
     } else {
-      downloadPath = visibleRepository.format() == RepositoryFormat.TERRAFORM
-              && !storagePath.equals(publicPath)
+      downloadPath = indexNamespace.isPresent() || (visibleRepository.format() == RepositoryFormat.TERRAFORM
+              && !storagePath.equals(publicPath))
           ? publicPath
           : storagePath;
     }

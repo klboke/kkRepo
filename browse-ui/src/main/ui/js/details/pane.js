@@ -223,17 +223,18 @@ async function showAssetDetail(entry) {
   if (!mount) return;
   const detail = await fetchAssetAttributes(entry);
   const browseOnly = !entry.downloadUrl;
-  const usage = browseOnly ? null : await usageDetailForEntry(entry, detail);
+  const deleteEntry = browseOnly || entry.readOnly ? null : entry;
+  const usage = browseOnly || entry.readOnly ? null : await usageDetailForEntry(entry, detail);
   const dockerUsage = currentRepository()?.format === "docker" ? dockerUsageDetail(entry, detail) : null;
   const uploader = detail?.uploader || "-";
   const uploaderIp = detail?.uploaderIp || "";
   const sourceRepository = detail?.sourceRepository || entry.sourceRepository || "";
   const dockerDetail = isDockerDetail(detail);
   const downloadUrl = dockerDetail ? (entry.downloadUrl || detail?.downloadUrl) : (detail?.downloadUrl || entry.downloadUrl);
-  const download = renderAssetDownloadLink(downloadUrl);
+  const download = renderAssetDownloadLink(downloadUrl, entry.readOnly);
   mount.innerHTML = `
     <div class="detail-pane">
-      ${detailHead(iconForFile(entry.name || entry.path, "crumb-icon"), entry.path, browseOnly ? null : entry)}
+      ${detailHead(iconForFile(entry.name || entry.path, "crumb-icon"), entry.path, deleteEntry)}
       ${dockerDetail
         ? renderDockerSummaryPanel(entry, detail, sourceRepository)
         : renderGenericAssetSummaryPanel(entry, detail, sourceRepository, uploader, uploaderIp)}
@@ -243,14 +244,20 @@ async function showAssetDetail(entry) {
       ${download}
     </div>`;
   if (dockerUsage || usage) bindUsageControls(mount, (dockerUsage || usage).snippets);
-  bindDeleteControl(mount, browseOnly ? null : entry);
+  bindDeleteControl(mount, deleteEntry);
+  const copy = mount.querySelector(".download-copy");
+  if (copy) copy.addEventListener("click", () => copyWithFeedback(copy,
+    mount.querySelector(".download-row a").href, "Copy URL", "Copied",
+    "Copy failed", mount.querySelector(".download-feedback")));
 }
 
-function renderAssetDownloadLink(downloadUrl) {
+function renderAssetDownloadLink(downloadUrl, copyable = false) {
   const target = typeof downloadUrl === "string" ? downloadUrl : "";
   if (!target) return "";
   return `<div class="download-row">
       <a class="copy-button" href="${escapeHtml(target)}" target="_blank" rel="noopener noreferrer">${lucideIcon("download")} Download</a>
+      ${copyable ? `<button type="button" class="usage-copy download-copy" aria-label="Copy URL" title="Copy URL">${lucideIcon("copy")}</button>
+      <span class="download-feedback" role="status"></span>` : ""}
     </div>`;
 }
 

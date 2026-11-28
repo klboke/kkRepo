@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionAction;
@@ -56,6 +57,12 @@ public class BrowseController {
   private AssetDao assetDao;
   private ConanRegistryDao conanDao;
   private OhpmBrowseService ohpmBrowse;
+  private RHostedBrowseIndexes rIndexes;
+
+  @Autowired
+  void setRHostedBrowseIndexes(RHostedBrowseIndexes rIndexes) {
+    this.rIndexes = rIndexes;
+  }
 
   @Autowired
   void setOhpmBrowseService(OhpmBrowseService ohpmBrowse) {
@@ -171,6 +178,9 @@ public class BrowseController {
       merged.putIfAbsent(versions.path(), versions);
     }
     List<BrowseEntry> entries = new ArrayList<>(merged.values());
+    if (rIndexes != null) {
+      entries.addAll(rIndexes.children(repo, parent, merged::containsKey));
+    }
     if (repo.format() == RepositoryFormat.SWIFT && swiftBrowseService != null) {
       entries = swiftBrowseService.project(repo, sources, parent, entries);
     }
@@ -435,5 +445,11 @@ public class BrowseController {
       String contentType,
       String sha1,
       Instant lastUpdatedAt,
-      String downloadUrl) {}
+      String downloadUrl,
+      @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean readOnly) {
+    public BrowseEntry(String name, String path, String sourceRepository, boolean leaf, Long size,
+        String contentType, String sha1, Instant lastUpdatedAt, String downloadUrl) {
+      this(name, path, sourceRepository, leaf, size, contentType, sha1, lastUpdatedAt, downloadUrl, false);
+    }
+  }
 }
