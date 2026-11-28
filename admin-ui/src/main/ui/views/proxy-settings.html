@@ -8,7 +8,7 @@
             <form class="blobstore-form" id="system-proxy-form">
               <div class="form-title">System proxy defaults</div>
               <div class="field-label">
-                <label class="checkbox-field"><input id="system-proxy-enabled" type="checkbox"><span>Enable system proxy</span></label>
+                <label class="form-switch"><input id="system-proxy-enabled" type="checkbox" role="switch" aria-controls="system-proxy-fields"><span>Enable system proxy</span></label>
                 <span class="field-help" tabindex="0" role="note"
                   aria-label="Applies to repositories that use system settings."
                   data-tooltip="Applies to repositories that use system settings.">
@@ -44,6 +44,7 @@
               <div class="form-actions">
                 <button type="submit" class="create-button" id="system-proxy-save">Save settings</button>
                 <button type="button" class="create-button secondary" id="system-proxy-test">Test connection</button>
+                <span class="form-note" id="system-proxy-pending" role="status" hidden>Save to apply changes.</span>
               </div>
             </form>
             <aside class="blobstore-form">
