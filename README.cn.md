@@ -7,7 +7,7 @@
 [![Container](https://img.shields.io/badge/ghcr.io-kkrepo-blue)](https://github.com/klboke/kkrepo/pkgs/container/kkrepo)
 [![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
 
-[English](README.md) | **中文**
+[English](README.md) | **中文** | [Türkçe](README.tr.md)
 
 kkRepo 是一个由社区驱动的开源、自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。
 

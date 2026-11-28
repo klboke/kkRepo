@@ -7,7 +7,7 @@
 [![Container](https://img.shields.io/badge/ghcr.io-kkrepo-blue)](https://github.com/klboke/kkrepo/pkgs/container/kkrepo)
 [![Security Policy](https://img.shields.io/badge/security-policy-green)](SECURITY.md)
 
-**English** | [中文](README.cn.md)
+**English** | [中文](README.cn.md) | [Türkçe](README.tr.md)
 
 kkRepo is a community-driven, open-source, self-hosted artifact repository. We built it to address the limitations and operational challenges of Sonatype Nexus Community Edition and give the community an open, reliable artifact manager it can maintain and improve over time.
 
