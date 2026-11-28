@@ -75,6 +75,20 @@ class RepositorySecurityFilterTest {
     assertEquals("alice", decisions.subject.userId());
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"/repository/missing/asset", "/service/rest/repository/browse/missing/"})
+  void unresolvedRepositoryStopsBeforeDispatch(String path) throws Exception {
+    var decisions = new RecordingDecisionService(AccessDecision.allow());
+    var filter = filter(new StubAuthenticationService(Optional.of(subject("alice"))), decisions,
+        new FakeRepositoryDao(repository("known")), true);
+    var response = new MockHttpServletResponse();
+    var chain = new ChainState();
+    filter.doFilter(new org.springframework.mock.web.MockHttpServletRequest("GET", path), response, chain);
+    assertEquals(404, response.getStatus());
+    assertEquals(0, chain.calls);
+    assertEquals(0, decisions.decisions);
+  }
+
   @Test
   void repositoryFilterRunsAfterSpringSessionRepositoryFilter() {
     Order order = RepositorySecurityFilter.class.getAnnotation(Order.class);
