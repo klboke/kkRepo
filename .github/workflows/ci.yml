@@ -200,6 +200,7 @@ jobs:
           scripts/ci/test-quickstart-runtime.sh
           scripts/ci/test-swift-e2e-wrappers.sh
           python3 -m unittest discover -s scripts/ci -p 'test_e2e_orchestration.py'
+          python3 -m unittest discover -s scripts/ci -p 'test_ohpm_s3_headers.py'
           scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service
           test -f .github/deploy/dev/systemd/kkrepo-native.service

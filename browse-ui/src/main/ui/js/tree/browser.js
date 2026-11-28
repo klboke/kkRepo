@@ -94,7 +94,7 @@ function renderTree() {
         <button type="button" class="crumb crumb-browse" data-crumb-root="1">Browse</button>
         <span class="crumb-sep">/</span>
         ${repositoryFormatIcon()}
-        <span class="crumb-current">${state.repo}</span>
+        <span class="crumb-current"></span>
       </div>
       <div class="tree-actions">
         <a class="tree-link" href="/service/rest/repository/browse/${encodeURIComponent(state.repo)}/" target="_blank">HTML View</a>
@@ -111,6 +111,7 @@ function renderTree() {
       </aside>
     </div>
   `;
+  drill.querySelector(".crumb-current").textContent = state.repo;
   drill.querySelector("#tree-root").addEventListener("keydown", navigateTree);
   initSplitResizer(drill.querySelector(".browse-split"));
   drill.querySelector(".crumb[data-crumb-root]").addEventListener("click", () => showRepositoryList());
@@ -126,7 +127,10 @@ async function loadAndRenderTreeLevel(path, mountEl, depth) {
   try {
     entries = await fetchChildren(state.repo, path);
   } catch (e) {
-    mountEl.innerHTML = `<div class="tree-error">Failed to load: ${e.message}</div>`;
+    const error = document.createElement("div");
+    error.className = "tree-error";
+    error.textContent = `Failed to load: ${e.message}`;
+    mountEl.replaceChildren(error);
     return;
   }
   if (!entries.length) {
