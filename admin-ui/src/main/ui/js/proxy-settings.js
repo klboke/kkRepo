@@ -15,6 +15,7 @@ const prefix = "repository-outbound-proxy";
 const scoped = "scoped-proxy";
 const fields = ["type", "host", "port", "username", "password", "password-clear"];
 let settings;
+let savedCommand;
 let repositories = [];
 let bypassHosts = [];
 let editing;
@@ -149,6 +150,7 @@ function renderBypassHosts() {
     const button = action(`${host} ×`, () => {
       bypassHosts = bypassHosts.filter(item => item !== host);
       renderBypassHosts();
+      updatePending();
       el("system-proxy-bypass").focus();
     });
     button.disabled = readOnly;
@@ -164,7 +166,12 @@ function addBypassHost() {
   if (!bypassHosts.includes(host)) bypassHosts = [...bypassHosts, host];
   input.value = "";
   renderBypassHosts();
+  updatePending();
   input.focus();
+}
+
+function updatePending() {
+  el("system-proxy-pending").hidden = !settings || JSON.stringify(command()) === savedCommand;
 }
 
 function refreshSystemFields() {
@@ -178,6 +185,7 @@ function refreshSystemFields() {
   el("system-proxy-username").required = auth;
   el("system-proxy-save").disabled = !editable;
   el("system-proxy-test").disabled = !editable || !repositories.some(canTestConnection);
+  updatePending();
 }
 
 function renderSettings() {
@@ -192,6 +200,7 @@ function renderSettings() {
   el("system-proxy-password-clear").checked = false;
   el("system-proxy-bypass").value = "";
   bypassHosts = [...settings.bypassHosts];
+  savedCommand = JSON.stringify(command());
   renderBypassHosts();
   refreshSystemFields();
 }
@@ -429,6 +438,7 @@ async function testConnection(event) {
 }
 
 function bind() {
+  el("system-proxy-form").addEventListener("input", updatePending);
   el("system-proxy-form").addEventListener("submit", saveSettings);
   for (const name of ["enabled", "auth"]) el(`system-proxy-${name}`).addEventListener("change", refreshSystemFields);
   el("system-proxy-add-host").addEventListener("click", addBypassHost);

@@ -820,7 +820,7 @@ body {
   gap: 12px;
 }
 
-.form-grid label:not(.checkbox-field),
+.form-grid label:not(.checkbox-field, .form-switch),
 .form-grid .form-field {
   display: grid;
   gap: 5px;

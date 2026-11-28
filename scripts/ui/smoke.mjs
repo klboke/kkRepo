@@ -449,8 +449,32 @@ try {
     await page.unroute(cacheEndpoint);
   }
   await page.setViewportSize({ width: 1024, height: 620 });
+  for (const realm of ["ldap", "oidc"]) {
+    await page.goto(origin + "/admin/#admin/security/" + realm);
+    const form = page.locator("#security-" + realm + "-form");
+    const enabled = form.getByRole("switch", { name: "Enabled", exact: true });
+    const requiredField = form.locator(realm === "ldap" ? "#security-ldap-url" : "#security-oidc-issuer");
+    await expect(enabled).toBeEnabled();
+    await expect(page.locator("#security-" + realm + "-json-editor")).toHaveValue(/"enabled"\s*:/);
+    const savedEnabled = await enabled.isChecked();
+    await enabled.check();
+    await expect(requiredField).toHaveAttribute("aria-required", "true");
+    await enabled.uncheck();
+    await expect(requiredField).not.toHaveAttribute("aria-required", "true");
+    await enabled.setChecked(savedEnabled);
+  }
+
+  await page.goto(origin + "/admin/#admin/system/proxy-settings");
+  const systemProxy = page.getByRole("switch", { name: "Enable system proxy" });
+  await expect(systemProxy).toBeEnabled();
+  const savedProxyEnabled = await systemProxy.isChecked();
+  await systemProxy.press("Space");
+  await expect(page.locator("#system-proxy-pending")).toBeVisible();
+  await systemProxy.setChecked(savedProxyEnabled);
+  await expect(page.locator("#system-proxy-pending")).toBeHidden();
+
   await page.goto(origin + "/admin/#admin/system/download-offload");
-  const offloadEnabled = page.locator("#offload-enabled");
+  const offloadEnabled = page.getByRole("switch", { name: "Enable download offload" });
   await expect(offloadEnabled).toBeEnabled();
   await offloadEnabled.check();
   const preset = page.locator("#offload-method-trigger");
