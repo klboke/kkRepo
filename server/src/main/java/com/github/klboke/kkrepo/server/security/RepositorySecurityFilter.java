@@ -145,7 +145,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     RepositoryRequest target = securedRequest.get();
     Optional<RepositoryRecord> repository = repositoryRegistry.findRecordByName(target.repository());
     if (repository.isEmpty()) {
-      filterChain.doFilter(request, response);
+      response.sendError(HttpServletResponse.SC_NOT_FOUND);
       return;
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
