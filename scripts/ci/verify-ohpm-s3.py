@@ -13,6 +13,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import secrets
 import subprocess
 import tarfile
@@ -109,6 +110,25 @@ class FaultGateway(http.server.ThreadingHTTPServer):
             self.failing = failing
 
 
+def forwarded_headers(headers, method, body_size):
+    result = []
+    length = body_size
+    for name, value in headers:
+        if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", name):
+            raise ValueError("Invalid upstream header name")
+        if not re.fullmatch(r"[\t\x20-\x7e\x80-\xff]*", value):
+            raise ValueError("Invalid upstream header value")
+        field = name.lower()
+        if field == "content-length" and method == "HEAD":
+            if not re.fullmatch(r"[0-9]+", value):
+                raise ValueError("Invalid upstream Content-Length")
+            length = int(value)
+        if field not in {"content-length", "transfer-encoding", "connection", "server", "date"}:
+            result.append((name, value))
+    result.append(("Content-Length", str(length)))
+    return result
+
+
 class GatewayRequest(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -140,14 +160,12 @@ class GatewayRequest(http.server.BaseHTTPRequestHandler):
             injected = (self.server.failing and self.command == "PUT"
                         and self.server.hsp_digest in self.path)
         status = 502
-        response_body = b""
-        response_headers = []
         try:
             payload = self.body()
             if injected:
                 status = 503
                 response_body = b"<Error><Code>SlowDown</Code><Message>Injected HSP PUT failure</Message></Error>"
-                response_headers = [("Content-Type", "application/xml")]
+                response_headers = [("Content-Type", "application/xml"), ("Content-Length", str(len(response_body)))]
             else:
                 connection = http.client.HTTPConnection("127.0.0.1", self.server.backend, timeout=120)
                 try:
@@ -156,13 +174,15 @@ class GatewayRequest(http.server.BaseHTTPRequestHandler):
                         connection.putheader(name, value)
                     connection.endheaders(payload)
                     response = connection.getresponse()
-                    status = response.status
-                    response_headers = response.getheaders()
                     response_body = response.read()
+                    response_headers = forwarded_headers(response.getheaders(), self.command, len(response_body))
+                    status = response.status
                 finally:
                     connection.close()
         except Exception as error:
+            status = 502
             response_body = ("Gateway transport failure: " + type(error).__name__).encode()
+            response_headers = [("Content-Length", str(len(response_body)))]
         finally:
             with self.server.lock:
                 self.server.events.append({"phase": phase, "method": self.command, "path": self.path,
@@ -170,11 +190,7 @@ class GatewayRequest(http.server.BaseHTTPRequestHandler):
                                            "injected": injected})
         self.send_response(status)
         for name, value in response_headers:
-            if name.lower() not in {"content-length", "transfer-encoding", "connection", "server", "date"}:
-                self.send_header(name, value)
-        response_length = next((value for name, value in response_headers
-                                if name.lower() == "content-length"), "0")
-        self.send_header("Content-Length", response_length if self.command == "HEAD" else str(len(response_body)))
+            self.send_header(name, value)
         self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
