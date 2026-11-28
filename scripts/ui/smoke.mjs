@@ -27,10 +27,12 @@ async function api(path, method, body) {
 
 async function verifyEntryAssets(page, app) {
   for (const ext of ["js", "css"]) {
-    const element = ext === "js" ? 'script[type="module"][src]' : 'link[rel="stylesheet"][href]';
-    const url = await page.locator(element).evaluateAll((elements, suffix) =>
-      elements.map(item => item.src || item.href).find(value => new URL(value).pathname.endsWith(suffix)), "/" + app + "." + ext);
-    assert.ok(url, "Missing " + app + "." + ext);
+    const path = "/assets/" + app + "." + ext + "?";
+    const asset = ext === "js" ? page.locator(`script[type="module"][src*="${path}"]`)
+      : page.locator(`link[rel="stylesheet"][href*="${path}"]`);
+    await expect(asset).toHaveCount(1);
+    const url = await asset.evaluate(element => element.src || element.href);
+    assert.equal(new URL(url).pathname, "/" + app + "/assets/" + app + "." + ext);
     const response = await page.request.get(url);
     assert.ok(response.ok());
     const digest = createHash("sha256").update(await response.body()).digest("hex").slice(0, 16);
