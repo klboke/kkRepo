@@ -9,7 +9,7 @@
 
 [English](README.md) | [中文](README.cn.md) | **Türkçe**
 
-kkRepo, topluluk odaklı, açık kaynaklı ve kendi sunucunuzda barındırabileceğiniz bir yapay (artifact) deposudur. Sonatype Nexus Community Edition'ın sınırlamalarını ve operasyonel zorluklarını aşmak ve topluluğa zaman içinde sürdürülebilir, güvenilir ve açık bir yapay yöneticisi sunmak amacıyla geliştirilmiştir.
+kkRepo, topluluk odaklı, açık kaynaklı ve kendi sunucunuzda barındırabileceğiniz bir yapıt (artifact) deposudur. Sonatype Nexus Community Edition'ın sınırlamalarını ve operasyonel zorluklarını aşmak ve topluluğa zaman içinde sürdürülebilir, güvenilir ve açık bir yapıt yöneticisi sunmak amacıyla geliştirilmiştir.
 
 Özel paketler yayınlamak, yukarı akış (upstream) bağımlılıklarını önbelleğe almak veya mevcut Sonatype Nexus Repository kurulumlarını taşımak için kullanabilirsiniz. Maven, npm ve Docker/OCI dahil 24 formatı destekler.
 
@@ -25,7 +25,7 @@ Docker, Docker Compose ve curl kurulu iken, kkRepo'yu JVM ve MySQL üzerinde ba�
 curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quickstart.sh | bash
 ```
 
-### İlk yapayınızı yükleyin
+### İlk yapıtınızı yükleyin
 
 1. [Yönetici konsolunu](http://127.0.0.1:19090/admin/) açın ve ilk yerel yönetici `admin` için bir parola belirleyin.
 2. **Blob Stores** altında, bu yerel deneme için `default` adında bir File blob deposu oluşturun.
@@ -40,7 +40,7 @@ curl --fail --user admin --upload-file hello.txt "$url"
 curl --fail --user admin "$url"
 ```
 
-İndirme `Hello, kkRepo!` yazdırdığında ilk yapayınızı yayınlamış ve geri almış olursunuz. `hello.txt` dosyasının boyutunu, sağlama toplamlarını (checksum) ve indirme URL'sini görmek için [depo tarayıcısında](http://127.0.0.1:19090/browse/) `raw-demo` deposunu açın.
+İndirme `Hello, kkRepo!` yazdırdığında ilk yapıtınızı yayınlamış ve geri almış olursunuz. `hello.txt` dosyasının boyutunu, sağlama toplamlarını (checksum) ve indirme URL'sini görmek için [depo tarayıcısında](http://127.0.0.1:19090/browse/) `raw-demo` deposunu açın.
 
 <details>
 <summary>PostgreSQL, Native imajlar ve sağlık kontrolleri</summary>
@@ -84,12 +84,12 @@ Nexus geçişi sütunundaki ✓ işareti, formatın desteklenen bir geçiş yolu
 
 ## Temel Özellikler
 
-- **Yapay dağıtımı.** Barındırılan depolar ekibinizin sürümlerini saklar, vekil depolar yukarı akış paketlerini isteğe bağlı olarak önbelleğe alır ve gruplar istemcilere birden fazla depodan okuma için tek bir URL sunar. Her formatın desteklenen türleri için yukarıdaki matrise bakın.
-- **Akışlı vekil indirmeler.** İstemcilerin önbelleğe alınmamış bir Docker katmanını, Maven yapayını veya PyPI paketini kkRepo yukarı akıştan okurken indirmeye başlayabilmesi için vekil depo başına akışı etkinleştirin. Önbelleğe yalnızca eksiksiz ve doğrulanmış yapaylar eklenir. [Desteklenen yapaylar ve akış koşulları](docs/en/dev/proxy-streaming-downloads.md)
-- **İndirme yükünü devretme (Download offload).** Bir File blob deposundaki yapaylar için kkRepo erişim ve tarama politikalarını kontrol edebilir, ardından tam dosya indirmesini Nginx gibi güvenilir bir ters vekil sunucuya devredebilir. Vekil sunucu baytları doğrudan sunarak uygulama kopyaları üzerindeki trafiği azaltır. [Nginx indirme devrini yapılandırın](docs/en/nginx-reverse-proxy.md#download-offload)
+- **Yapıt dağıtımı.** Barındırılan depolar ekibinizin sürümlerini saklar, vekil depolar yukarı akış paketlerini isteğe bağlı olarak önbelleğe alır ve gruplar istemcilere birden fazla depodan okuma için tek bir URL sunar. Her formatın desteklenen türleri için yukarıdaki matrise bakın.
+- **Akışlı vekil indirmeler.** İstemcilerin önbelleğe alınmamış bir Docker katmanını, Maven yapıtını veya PyPI paketini kkRepo yukarı akıştan okurken indirmeye başlayabilmesi için vekil depo başına akışı etkinleştirin. Önbelleğe yalnızca eksiksiz ve doğrulanmış yapıtlar eklenir. [Desteklenen yapıtlar ve akış koşulları](docs/en/dev/proxy-streaming-downloads.md)
+- **İndirme yükünü devretme (Download offload).** Bir File blob deposundaki yapıtlar için kkRepo erişim ve tarama politikalarını kontrol edebilir, ardından tam dosya indirmesini Nginx gibi güvenilir bir ters vekil sunucuya devredebilir. Vekil sunucu baytları doğrudan sunarak uygulama kopyaları üzerindeki trafiği azaltır. [Nginx indirme devrini yapılandırın](docs/en/nginx-reverse-proxy.md#download-offload)
 - **Kimlik ve erişim.** Yerel hesaplar, LDAP veya OIDC ile oturum açın. Roller aracılığıyla depo izinleri atayın, CI için belirteçler (token) oluşturun ve anonim okumaları yapılandırın. [Güvenlik modeli](docs/en/security-model.md)
-- **Tarama ve temizlik.** Seçili depolar için SBOM oluşturmayı ve güvenlik açığı taramasını etkinleştirin, muafiyetlerle indirme politikalarını uygulayın ve bir temizlik politikasının hangi yapayları sileceğini önizleyin. [Yapay tarama](docs/en/artifact-scanning-guide.md) · [Temizlik politikaları](docs/en/cleanup-policy-guide.md)
-- **Çoklu kopya (Replica) desteği.** Kopyalar meta verileri, oturumları ve görev durumunu MySQL veya PostgreSQL üzerinden paylaşır. Üretim yapaylarını S3, Alibaba Cloud OSS veya Azure Blob Storage içinde saklayın. [Dağıtım mimarisi](docs/en/build-deployment-guide.md) · [Azure depolama](docs/en/azure-blob-storage.md)
+- **Tarama ve temizlik.** Seçili depolar için SBOM oluşturmayı ve güvenlik açığı taramasını etkinleştirin, muafiyetlerle indirme politikalarını uygulayın ve bir temizlik politikasının hangi yapıtları sileceğini önizleyin. [Yapıt taraması](docs/en/artifact-scanning-guide.md) · [Temizlik politikaları](docs/en/cleanup-policy-guide.md)
+- **Çoklu kopya (Replica) desteği.** Kopyalar meta verileri, oturumları ve görev durumunu MySQL veya PostgreSQL üzerinden paylaşır. Üretim yapıtlarını S3, Alibaba Cloud OSS veya Azure Blob Storage içinde saklayın. [Dağıtım mimarisi](docs/en/build-deployment-guide.md) · [Azure depolama](docs/en/azure-blob-storage.md)
 
 Varsayılan dağıtım JVM üzerinde çalışır. İsteğe bağlı bir Native imaj, iki CPU ve 1 GiB ile sınırlandırılmış yerel bir kıyaslama testinde konteyner oluşturulduktan sonra medyan **1,04 saniyede** hazır hale geldi ve boşta medyan **170,4 MiB** konteyner belleği kullandı. Test kurulumu ve ısınmış aktarım hızı için [Native ve JVM karşılaştırması](docs/en/native-vs-jvm-guide.md) belgesine bakın.
 
@@ -98,7 +98,7 @@ Varsayılan dağıtım JVM üzerinde çalışır. İsteğe bağlı bir Native im
 kkRepo ekibi kendi depolarını taşırken özgün alan adını korudu. Geçiş sonrasında CI aynı Maven ayarlarını, npm kayıt defterini ve PyPI dizin URL'sini kullanmaya devam etti. Dağıtım geçmişi ve sonuç için [ekibin geçiş öyküsünü](docs/en/why-kkrepo.md#migration-result) okuyun.
 
 1. **Kapsamı kontrol edin ve ön kontrolü çalıştırın.** Kaynak Nexus sürümünü, depo formatlarını ve ihtiyacınız olan verileri kontrol edin. Yönetici konsolundaki **Nexus Metadata** sayfasında ön kontrolü (preflight) çalıştırın ve bildirdiği engelleri çözün.
-2. **Yapılandırmayı ve yapayları taşıyın.** Önce kullanıcıları, izinleri ve depo tanımlarını taşıyın. Ardından meta verileri ve paketleri eşitlemek için **Nexus Repository Data** kullanın. Tam eşitleme ile başlayın. Sonraki çalıştırmalar artımlı olabilir ve kesintiye uğrayan aktarımlar kaldığı yerden devam edebilir.
+2. **Yapılandırmayı ve yapıtları taşıyın.** Önce kullanıcıları, izinleri ve depo tanımlarını taşıyın. Ardından meta verileri ve paketleri eşitlemek için **Nexus Repository Data** kullanın. Tam eşitleme ile başlayın. Sonraki çalıştırmalar artımlı olabilir ve kesintiye uğrayan aktarımlar kaldığı yerden devam edebilir.
 3. **Doğrulayın ve geçişi tamamlayın.** Özgün alan adını kkRepo'ya yönlendirmeden önce mevcut istemcilerinizle izinleri ve indirmeleri test edin. Çoğu istemci `/repository/<repo>/...` URL'lerini korur. Docker/OCI için `/v2/` giriş noktasını, depo adlarını ve kayıt defteri yönlendirmesini koruyun.
 
 ![Yönetici konsolundaki depo verisi geçiş görevleri ve ilerleme durumu](docs/img/img_6.png)
@@ -108,13 +108,13 @@ kkRepo ekibi kendi depolarını taşırken özgün alan adını korudu. Geçiş 
 <details>
 <summary>Browse ve Admin ekranlarından daha fazla görüntü</summary>
 
-![Depo tarayıcısında yapay yolu, sağlama toplamları ve istemci kullanımı](docs/img/img_1.png)
+![Depo tarayıcısında yapıt yolu, sağlama toplamları ve istemci kullanımı](docs/img/img_1.png)
 
 ![Kullanıcı depo listesi](docs/img/img_7.png)
 
-![Kullanıcı yapay araması](docs/img/img.png)
+![Kullanıcıların yapıt aradığı ekran](docs/img/img.png)
 
-![Kullanıcı yapay yükleme](docs/img/img_2.png)
+![Kullanıcıların yapıt yüklediği ekran](docs/img/img_2.png)
 
 ![Yönetici Blob Store yönetimi](docs/img/img_4.png)
 
@@ -135,7 +135,7 @@ kkRepo ekibi kendi depolarını taşırken özgün alan adını korudu. Geçiş 
 | Depolar ve istemciler | [Format kılavuzları](docs/en/repository-guides/README.md) · [İstemci örnekleri](docs/en/client-recipes.md) · [kkRepo ile özel Maven deposu kurulumu](docs/en/blog/setup-maven-private-repository-with-kkrepo.md) |
 | Nexus'tan geçiş | [Kapsam ve önkoşullar](docs/en/nexus-migration-guide.md) · [Geçiş uygulama kılavuzu](docs/en/migration-playbook.md) |
 | Dağıtım ve operasyon | [Derleme ve dağıtım](docs/en/build-deployment-guide.md) · [Üretim sıkılaştırma](docs/en/production-hardening.md) · [Nginx ters vekil sunucu](docs/en/nginx-reverse-proxy.md) · [İzleme](docs/en/monitoring-observability-guide.md) · [Yedekleme ve geri yükleme](docs/en/backup-restore.md) |
-| Erişim ve yapay yönetimi | [Güvenlik modeli](docs/en/security-model.md) · [İçerik seçiciler](docs/en/content-selectors.md) · [Yapay tarama](docs/en/artifact-scanning-guide.md) · [Temizlik politikaları](docs/en/cleanup-policy-guide.md) · [Depolama kullanımı](docs/en/admin-storage-usage.md) |
+| Erişim ve yapıt yönetimi | [Güvenlik modeli](docs/en/security-model.md) · [İçerik seçiciler](docs/en/content-selectors.md) · [Yapıt taraması](docs/en/artifact-scanning-guide.md) · [Temizlik politikaları](docs/en/cleanup-policy-guide.md) · [Depolama kullanımı](docs/en/admin-storage-usage.md) |
 | Sorun giderme ve geliştirme | [SSS](docs/en/faq.md) · [Sorun giderme](docs/en/troubleshooting.md) · [Geliştirme kılavuzu](docs/en/development-guide.md) |
 
 ## Yol Haritası
@@ -150,7 +150,7 @@ kkRepo ekibi kendi depolarını taşırken özgün alan adını korudu. Geçiş 
 | Platform yeteneği | Teslim edilen yetenek | Belgeler |
 | --- | --- | --- |
 | PostgreSQL arka ucu | Geçiş ve çoklu kopya testleriyle MySQL ve PostgreSQL arka uçları. | [veritabanı arka uç kılavuzu](docs/en/database-backends.md) · [Çince tasarım planı](docs/zh/dev/pluggable-database-access-layer-design.md) |
-| Yapay tarama | İsteğe bağlı indirme zorunluluğuyla depo başına eşzamansız SBOM ve güvenlik açığı analizi. | [kullanım kılavuzu](docs/en/artifact-scanning-guide.md) · [Çince tasarım notları](docs/zh/dev/security-scanning-design.md) |
+| Yapıt taraması | Her depo için SBOM oluşturma ve güvenlik açığı analizi eşzamansız yürütülür. İstenirse tarama politikasına uymayan indirmeler engellenebilir. | [kullanım kılavuzu](docs/en/artifact-scanning-guide.md) · [Çince tasarım notları](docs/zh/dev/security-scanning-design.md) |
 
 <details>
 <summary>Depo formatı kilometre taşları (17)</summary>
@@ -181,7 +181,7 @@ kkRepo ekibi kendi depolarını taşırken özgün alan adını korudu. Geçiş 
 
 ## kkRepo'yu Kimler Kullanıyor?
 
-Ekibiniz kkRepo kullanıyorsa, kuruluşunuzun adını ve onu nasıl kullandığınızla ilgili kısa bir bilgiyi [kullanıcı kayıt issue'sunda](https://github.com/klboke/kkRepo/issues/94) paylaşın. Örneğin, Nexus'tan mı geçiş yaptınız yoksa ilk özel yapay deponuzu mu kurdunuz? Hikayeniz, kkRepo'yu değerlendiren ekiplerin kendilerine benzer bir kullanım senaryosu bulmasına yardımcı olur ve bakımcılara projeye kimlerin güvendiği ve neye ihtiyaç duydukları konusunda daha net bir fikir verir.
+Ekibiniz kkRepo kullanıyorsa, kuruluşunuzun adını ve onu nasıl kullandığınızla ilgili kısa bir bilgiyi [kullanıcı kayıt issue'sunda](https://github.com/klboke/kkRepo/issues/94) paylaşın. Örneğin, Nexus'tan mı geçiş yaptınız yoksa ilk özel yapıt deponuzu mu kurdunuz? Hikayeniz, kkRepo'yu değerlendiren ekiplerin kendilerine benzer bir kullanım senaryosu bulmasına yardımcı olur ve bakımcılara projeye kimlerin güvendiği ve neye ihtiyaç duydukları konusunda daha net bir fikir verir.
 
 Kayıt issue'su benimseme hikayeleri içindir. Hatalar ve özellik istekleri için lütfen [issue şablonlarını](https://github.com/klboke/kkRepo/issues/new/choose) kullanın.
 
