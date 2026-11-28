@@ -63,14 +63,48 @@ function options(select, values, empty) {
   const previous = select.value;
   select.replaceChildren();
   if (empty) select.add(new Option(empty, ""));
-  values.forEach(({ value, text }) => select.add(new Option(text, value)));
-  if (values.some((value) => value.value === previous)) select.value = previous;
+  for (const { value, text, id } of values) {
+    const option = new Option(text, value);
+    if (id != null) option.dataset.id = String(id);
+    select.add(option);
+  }
+  if (values.some(option => option.value === previous)) select.value = previous;
+}
+
+function controls() {
+  const state = report?.job.state;
+  const directory = (report?.job.source || el("source").value) === "DIRECTORY";
+  const planning = !report || state === "PLANNING";
+  const applying = state === "READY" || state === "APPLYING";
+  const files = el("files").files;
+  el("source").disabled = busy || Boolean(report);
+  el("directory").hidden = !directory || !(planning || applying);
+  el("registry").hidden = directory || !planning;
+  el("proxy").disabled = busy || Boolean(report);
+  el("selection").textContent = files.length ? `${files[0].webkitRelativePath.split("/")[0]} · ${files.length} files`
+    : report ? "Select the original directory to continue." : "No directory selected";
+  el("plan").hidden = Boolean(report);
+  el("continue").hidden = state !== "PLANNING";
+  el("apply").hidden = !applying;
+  el("apply").textContent = state === "APPLYING" ? "Resume import" : "Start import";
+  const inputReady = directory ? files.length > 0 : Boolean(el("proxy").value && el("packages").value.trim());
+  el("plan").disabled = el("continue").disabled = busy || !el("target").value || !inputReady;
+  el("apply").disabled = busy || (directory && !files.length);
+  el("hint").textContent = planning ? "Verify archives and save a plan without writing target packages."
+    : applying ? "Existing versions and conflicting tags are never overwritten." : "";
 }
 
 function render() {
   const result = el("result");
-  result.hidden = !report;
+  el("report").hidden = !report;
+  controls();
   if (!report) return;
+  const counts = new Map();
+  for (const item of report.items) counts.set(item.state, (counts.get(item.state) || 0) + 1);
+  const stages = { PLANNING: "Dry run in progress", READY: "Dry run complete", APPLYING: "Import in progress",
+    COMPLETED: "Import complete", CANCELLED: "Job cancelled" };
+  el("summary").textContent = [stages[report.job.state] || report.job.state,
+    ...[...counts].map(([state, count]) => `${count} ${state.toLowerCase()}`)].join(" · ");
   const rows = report.items.map((item) => `<tr><td>${escapeHtml(item.packageName || item.plan.sourceKey)}</td>
     <td>${escapeHtml(item.version || "")}</td><td>${escapeHtml(item.state)}</td>
     <td>${escapeHtml(item.detail)}</td></tr>`).join("");
@@ -82,35 +116,48 @@ function render() {
 
 async function refreshReport(id) {
   report = await request(`${api}/${encodeURIComponent(id)}`);
+  el("source").value = report.job.source;
+  if (report.job.source === "REGISTRY") {
+    const source = [...el("proxy").options].find(option => option.dataset.id === String(report.job.sourceRepositoryId));
+    el("proxy").value = source?.value || "";
+  }
   render();
 }
 
 async function refreshJobs() {
-  if (!el("target").value) return;
-  const jobs = await request(`${api}?repository=${encodeURIComponent(el("target").value)}`);
+  const jobs = !el("target").value ? [] : await request(`${api}?repository=${encodeURIComponent(el("target").value)}`);
   options(el("jobs"), jobs.map((job) => ({ value: job.id, text: `${job.createdAt} · ${job.source} · ${job.state} · ${job.id}` })),
-    "Select a saved job");
+    "New import");
   if (report && jobs.some((job) => job.id === report.job.id)) {
     el("jobs").value = report.job.id;
     await refreshReport(report.job.id);
+  } else {
+    report = null;
+    el("jobs").value = "";
+    render();
   }
 }
 
-async function run(action) {
+async function run(action, stoppable = false) {
   if (busy) return;
   busy = true; stopped = false;
   el("form").querySelectorAll("input, select, textarea, button").forEach((element) => { element.disabled = true; });
-  el("stop").disabled = false;
+  el("stop").hidden = !stoppable;
+  el("stop").disabled = !stoppable;
   el("status").textContent = "Working…";
   try {
     await action();
-    el("status").textContent = stopped ? "Stopped. Saved items can be resumed." : "Finished. Review the item results.";
+    el("status").textContent = stopped && report?.job.state !== "COMPLETED" ? "Stopped. Saved items can be resumed." : "";
   } catch (error) {
+    if (stoppable && report) {
+      try { await refreshJobs(); } catch { /* Keep the original operation error. */ }
+    }
     el("status").textContent = error.message;
   } finally {
     busy = false;
     el("form").querySelectorAll("input, select, textarea, button").forEach((element) => { element.disabled = false; });
-    el("stop").disabled = true;
+    el("stop").hidden = true;
+    controls();
   }
 }
 
@@ -187,15 +234,21 @@ async function load() {
   if (!initialized) {
     initialized = true;
     el("form").addEventListener("submit", (event) => event.preventDefault());
-    el("plan").addEventListener("click", () => run(() => plan(false)));
-    el("continue").addEventListener("click", () => run(() => plan(true)));
-    el("apply").addEventListener("click", () => run(apply));
+    el("choose").addEventListener("click", () => el("files").click());
+    el("files").addEventListener("change", controls);
+    el("source").addEventListener("change", controls);
+    el("proxy").addEventListener("change", controls);
+    el("packages").addEventListener("input", controls);
+    el("plan").addEventListener("click", () => run(() => plan(false), true));
+    el("continue").addEventListener("click", () => run(() => plan(true), true));
+    el("apply").addEventListener("click", () => run(apply, true));
     el("stop").addEventListener("click", () => { stopped = true; el("stop").disabled = true; });
     el("refresh").addEventListener("click", () => run(refreshJobs));
     el("download").addEventListener("click", download);
     el("jobs").addEventListener("change", () => run(async () => {
+      report = null;
+      render();
       if (el("jobs").value) await refreshReport(el("jobs").value);
-      else { report = null; render(); }
     }));
     el("target").addEventListener("change", () => run(async () => {
       report = null; render(); await refreshJobs();
@@ -206,7 +259,7 @@ async function load() {
     const repositories = await request("/internal/repositories?purpose=admin");
     for (const [name, type] of [["target", "hosted"], ["proxy", "proxy"]]) {
       options(el(name), repositories.filter((repository) => repository.format === "ohpm"
-        && repository.type.toLowerCase() === type).map((repository) => ({ value: repository.name, text: repository.name })));
+        && repository.type.toLowerCase() === type).map((repository) => ({ value: repository.name, text: repository.name, id: repository.id })));
     }
     await refreshJobs();
   });

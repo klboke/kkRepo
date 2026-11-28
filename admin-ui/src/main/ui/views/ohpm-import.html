@@ -5,25 +5,48 @@
             <span class="heading-copy">Plan, verify and resume package imports into an OHPM hosted repository</span>
           </div>
           <form class="blobstore-form" id="ohpm-import-form">
-            <div class="form-grid">
+            <div class="form-grid ohpm-import-grid">
               <label><span>Target hosted repository</span><select id="ohpm-import-target" required></select></label>
               <label><span>Source</span><select id="ohpm-import-source"><option value="DIRECTORY">File directory</option><option value="REGISTRY">Existing registry</option></select></label>
-              <label><span>Registry source proxy configuration</span><select id="ohpm-import-proxy"></select></label>
-              <label><span>Package names, one per line (registry source)</span><textarea id="ohpm-import-packages" rows="3" spellcheck="false" placeholder="@scope/library"></textarea></label>
-              <label class="full-width"><span>Source directory (HAR/HSP pairs or HSP tgz bundles)</span><input id="ohpm-import-files" type="file" webkitdirectory multiple></label>
-              <label class="full-width"><span>Saved jobs</span><select id="ohpm-import-jobs"><option value="">Select a saved job</option></select></label>
             </div>
-            <p>Dry run verifies archives and saves a plan without writing target packages. To resume a directory import, select the same directory again. An optional matching <code>.metadata.json</code> file preserves package metadata and tags; without it, versions are imported without tags.</p>
-            <p>Existing versions and conflicting tags are never overwritten. Users, tokens, permissions and storage settings require separate configuration. Registry imports use the selected proxy's remote credentials and download allowlist.</p>
-            <div class="form-actions">
-              <button class="create-button secondary" id="ohpm-import-plan" type="button">New dry run</button>
-              <button class="create-button secondary" id="ohpm-import-continue" type="button">Continue dry run</button>
-              <button class="create-button" id="ohpm-import-apply" type="button">Import / resume</button>
-              <button class="create-button secondary" id="ohpm-import-stop" type="button" disabled>Stop after current item</button>
-              <button class="create-button secondary" id="ohpm-import-refresh" type="button">Refresh jobs</button>
-              <button class="create-button secondary" id="ohpm-import-download" type="button">Download report</button>
+            <section id="ohpm-import-directory" class="ohpm-import-source">
+              <div class="field-label"><label for="ohpm-import-choose">Source directory</label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="A matching .metadata.json preserves package metadata and tags."
+                  data-tooltip="A matching .metadata.json preserves package metadata and tags."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+              </div>
+              <div class="ohpm-import-line">
+                <button type="button" class="create-button secondary" id="ohpm-import-choose">Choose directory…</button>
+                <span class="form-note" id="ohpm-import-selection" aria-live="polite"></span>
+                <input type="file" id="ohpm-import-files" webkitdirectory multiple hidden>
+              </div>
+              <p class="form-note">HAR/HSP pairs or HSP tgz bundles</p>
+            </section>
+            <div id="ohpm-import-registry" class="form-grid ohpm-import-grid ohpm-import-source" hidden>
+              <label><span>Source proxy repository <span class="field-help" tabindex="0" role="note" aria-label="Uses the selected proxy’s remote credentials and download allowlist." data-tooltip="Uses the selected proxy’s remote credentials and download allowlist."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><select id="ohpm-import-proxy"></select></label>
+              <label><span>Package names, one per line</span><textarea id="ohpm-import-packages" rows="3" spellcheck="false" placeholder="@scope/library"></textarea></label>
             </div>
+            <div class="ohpm-import-line form-actions">
+              <button class="create-button" id="ohpm-import-plan" type="button" disabled>Create dry-run plan</button>
+              <button class="create-button" id="ohpm-import-continue" type="button" hidden>Continue dry run</button>
+              <button class="create-button" id="ohpm-import-apply" type="button" hidden>Start import</button>
+              <button class="create-button secondary" id="ohpm-import-stop" type="button" hidden>Stop after current item</button>
+              <span class="form-note" id="ohpm-import-hint">Verify files and save a plan before importing packages.</span>
+            </div>
+            <p id="ohpm-import-status" class="form-note" role="status" aria-live="polite"></p>
+            <section class="ohpm-import-jobs">
+              <div class="field-label"><label for="ohpm-import-jobs">Saved jobs</label></div>
+              <div class="ohpm-import-line">
+                <select id="ohpm-import-jobs"><option value="">Select a saved job</option></select>
+                <button class="create-button secondary" id="ohpm-import-refresh" type="button">Refresh jobs</button>
+              </div>
+              <div id="ohpm-import-report" hidden>
+                <div class="ohpm-import-line ohpm-import-report-head">
+                  <strong id="ohpm-import-summary"></strong>
+                  <button class="create-button secondary" id="ohpm-import-download" type="button">Download report</button>
+                </div>
+                <div class="migration-result" id="ohpm-import-result"></div>
+              </div>
+            </section>
           </form>
-          <p id="ohpm-import-status" role="status" aria-live="polite"></p>
-          <div class="migration-result" id="ohpm-import-result" hidden></div>
         </section>
