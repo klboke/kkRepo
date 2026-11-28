@@ -449,6 +449,21 @@ try {
     await page.unroute(cacheEndpoint);
   }
   await page.setViewportSize({ width: 1024, height: 620 });
+  for (const realm of ["ldap", "oidc"]) {
+    await page.goto(origin + "/admin/#admin/security/" + realm);
+    const form = page.locator("#security-" + realm + "-form");
+    const enabled = form.getByRole("switch", { name: "Enabled", exact: true });
+    const requiredField = form.locator(realm === "ldap" ? "#security-ldap-url" : "#security-oidc-issuer");
+    await expect(enabled).toBeEnabled();
+    await expect(page.locator("#security-" + realm + "-json-editor")).toHaveValue(/"enabled"\s*:/);
+    const savedEnabled = await enabled.isChecked();
+    await enabled.check();
+    await expect(requiredField).toHaveAttribute("aria-required", "true");
+    await enabled.uncheck();
+    await expect(requiredField).not.toHaveAttribute("aria-required", "true");
+    await enabled.setChecked(savedEnabled);
+  }
+
   await page.goto(origin + "/admin/#admin/system/proxy-settings");
   const systemProxy = page.getByRole("switch", { name: "Enable system proxy" });
   await expect(systemProxy).toBeEnabled();
