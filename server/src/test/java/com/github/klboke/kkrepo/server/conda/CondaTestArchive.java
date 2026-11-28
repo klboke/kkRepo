@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.conda;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.server.support.TarTestEntries;
 import com.github.luben.zstd.ZstdOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -112,7 +113,7 @@ final class CondaTestArchive {
 
   private static void put(TarArchiveOutputStream tar, TarItem item) throws IOException {
     if (item.special()) {
-      TarArchiveEntry entry = new TarArchiveEntry(item.name(), TarConstants.LF_FIFO);
+      TarArchiveEntry entry = TarTestEntries.entry(item.name(), TarConstants.LF_FIFO);
       tar.putArchiveEntry(entry);
       tar.closeArchiveEntry();
       return;
@@ -121,7 +122,7 @@ final class CondaTestArchive {
       putFile(tar, item.name(), item.content());
       return;
     }
-    TarArchiveEntry entry = new TarArchiveEntry(
+    TarArchiveEntry entry = TarTestEntries.entry(
         item.name(), item.symbolicLink() ? TarConstants.LF_SYMLINK : TarConstants.LF_LINK);
     entry.setLinkName(item.linkTarget());
     tar.putArchiveEntry(entry);
@@ -130,7 +131,7 @@ final class CondaTestArchive {
 
   private static void putFile(TarArchiveOutputStream tar, String name, byte[] content)
       throws IOException {
-    TarArchiveEntry entry = new TarArchiveEntry(name);
+    TarArchiveEntry entry = TarTestEntries.entry(name, TarConstants.LF_NORMAL);
     entry.setSize(content.length);
     tar.putArchiveEntry(entry);
     tar.write(content);

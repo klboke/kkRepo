@@ -11,8 +11,24 @@ import org.springframework.http.ResponseEntity;
  * <p>Implementations register every route they own. Protocol services remain behind handlers;
  * controllers and security filters depend only on this routing boundary.
  */
-public interface RepositoryProtocolHandler {
+public interface LegacyRepositoryProtocolHandler {
   Collection<RepositoryProtocolRoute> routes();
+
+  /**
+   * Whether this handler may be registered with no route. Adapters that discover their routes at
+   * runtime set this to {@code true}; concrete built-in handlers keep the strict default.
+   */
+  default boolean allowsEmptyRoutes() {
+    return false;
+  }
+
+  /**
+   * Whether this handler is the compatibility catch-all that serves paths no focused handler owns.
+   * Plugin routes may overlap it; they may not overlap any other built-in route.
+   */
+  default boolean compatibilityFallback() {
+    return false;
+  }
 
   ResponseEntity<?> handle(RepositoryProtocolRequest request)
       throws IOException, ServletException;

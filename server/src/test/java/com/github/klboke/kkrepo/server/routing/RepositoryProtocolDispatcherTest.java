@@ -292,7 +292,7 @@ class RepositoryProtocolDispatcherTest {
   @Test
   void handlerMustRegisterAtLeastOneRoute() {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
-    RepositoryProtocolHandler empty = new RecordingHandler(List.of(), ResponseEntity.ok().build());
+    LegacyRepositoryProtocolHandler empty = new RecordingHandler(List.of(), ResponseEntity.ok().build());
 
     assertThrows(
         IllegalStateException.class,
@@ -313,7 +313,7 @@ class RepositoryProtocolDispatcherTest {
   @Test
   void nullHandlerRegistrationIsRejectedInsteadOfSilentlySkipped() {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
-    List<RepositoryProtocolHandler> handlers = new ArrayList<>();
+    List<LegacyRepositoryProtocolHandler> handlers = new ArrayList<>();
     handlers.add(handler(
         RepositoryProtocolRoute.anyPath(
             RepositoryFormat.RAW, RepositoryType.HOSTED, HttpMethod.GET, 0),
@@ -350,7 +350,7 @@ class RepositoryProtocolDispatcherTest {
   @Test
   void readDispatchWrapsCheckedHandlerFailures() {
     RepositoryRuntime runtime = runtime(RepositoryFormat.RAW, RepositoryType.HOSTED);
-    RepositoryProtocolHandler failing = new RepositoryProtocolHandler() {
+    LegacyRepositoryProtocolHandler failing = new LegacyRepositoryProtocolHandler() {
       @Override
       public Collection<RepositoryProtocolRoute> routes() {
         return List.of(RepositoryProtocolRoute.anyPath(
@@ -395,7 +395,7 @@ class RepositoryProtocolDispatcherTest {
   }
 
   private static RepositoryProtocolDispatcher dispatcher(
-      RepositoryRuntime runtime, RepositoryProtocolHandler... handlers) {
+      RepositoryRuntime runtime, LegacyRepositoryProtocolHandler... handlers) {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     when(runtimes.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new RepositoryProtocolDispatcher(runtimes, List.of(handlers));
@@ -432,7 +432,7 @@ class RepositoryProtocolDispatcherTest {
         List.of());
   }
 
-  private static final class RecordingHandler implements RepositoryProtocolHandler {
+  private static final class RecordingHandler implements LegacyRepositoryProtocolHandler {
     private final Collection<RepositoryProtocolRoute> routes;
     private final ResponseEntity<?> response;
     private int invocations;

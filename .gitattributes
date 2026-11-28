@@ -1,2 +1,19 @@
+# UI contract tests assert source sequences with LF; keep these assets LF on every OS.
+admin-ui/src/main/resources/** text eol=lf
+browse-ui/src/main/resources/** text eol=lf
+
+# Binary assets under those trees must never be normalised: the PNG signature itself contains \r\n.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+
+# Migration checksums and security fixtures are byte-sensitive; never rewrite them to CRLF.
+**/src/main/resources/db/migration/** text eol=lf
+
 # Conan client fixture headers are packaged test data, not C/C++ project sources.
 compat-test/src/test/resources/conan/fixture/include/*.h -linguist-detectable

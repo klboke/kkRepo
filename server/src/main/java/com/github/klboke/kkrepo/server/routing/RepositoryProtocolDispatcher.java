@@ -43,11 +43,11 @@ public class RepositoryProtocolDispatcher {
   private final Map<RouteKey, List<RegisteredRoute>> routes;
 
   public RepositoryProtocolDispatcher(
-      RepositoryRuntimeRegistry runtimes, List<RepositoryProtocolHandler> handlers) {
+      RepositoryRuntimeRegistry runtimes, List<LegacyRepositoryProtocolHandler> handlers) {
     this.runtimes = Objects.requireNonNull(runtimes, "runtimes");
     Objects.requireNonNull(handlers, "handlers");
     Map<RouteKey, List<RegisteredRoute>> registered = new HashMap<>();
-    for (RepositoryProtocolHandler handler : handlers) {
+    for (LegacyRepositoryProtocolHandler handler : handlers) {
       if (handler == null) {
         throw new IllegalStateException("Repository protocol handler list contains null");
       }
@@ -64,6 +64,7 @@ public class RepositoryProtocolDispatcher {
     registered.forEach((key, value) -> {
       List<RegisteredRoute> ordered = value.stream().sorted(ROUTE_ORDER).toList();
       requireUnambiguousRegistrations(key, ordered);
+      rejectPluginReplacements(key, ordered);
       indexed.put(key, ordered);
     });
     this.routes = Map.copyOf(indexed);
@@ -143,7 +144,7 @@ public class RepositoryProtocolDispatcher {
   }
 
   private record RegisteredRoute(
-      RepositoryProtocolRoute route, RepositoryProtocolHandler handler) {}
+      RepositoryProtocolRoute route, LegacyRepositoryProtocolHandler handler) {}
 
   private record RouteKey(
       RepositoryFormat format, RepositoryType type, HttpMethod method) {
@@ -169,16 +170,42 @@ public class RepositoryProtocolDispatcher {
     }
   }
 
+  /**
+   * Plugins add routes; they never replace a built-in one, whatever their order. Only the
+   * compatibility catch-all may be overlapped.
+   */
+  private static void rejectPluginReplacements(RouteKey key, List<RegisteredRoute> registrations) {
+    for (RegisteredRoute plugin : registrations) {
+      if (!(plugin.handler() instanceof PluginProtocolDispatcher)) continue;
+      for (RegisteredRoute builtin : registrations) {
+        if (builtin.handler() instanceof PluginProtocolDispatcher
+            || builtin.handler().compatibilityFallback()
+            || !builtin.route().pathPattern().equals(plugin.route().pathPattern())) {
+          continue;
+        }
+        throw new IllegalStateException(
+            "Plugin repository protocol route " + key.format() + "/" + key.type() + " "
+                + key.method() + " " + plugin.route().pathPattern()
+                + " would replace the built-in handler " + builtin.handler().getClass().getName());
+      }
+    }
+  }
+
   private record RegistrationKey(String pathPattern, int order) {}
 
   private static final class CollectionValidator {
     private CollectionValidator() {}
 
-    static List<RepositoryProtocolRoute> requireRoutes(RepositoryProtocolHandler handler) {
+    static List<RepositoryProtocolRoute> requireRoutes(LegacyRepositoryProtocolHandler handler) {
       var routes = handler.routes();
-      if (routes == null || routes.isEmpty() || routes.stream().anyMatch(Objects::isNull)) {
+      if (routes == null || routes.stream().anyMatch(Objects::isNull)) {
         throw new IllegalStateException(
-            "Repository protocol handler must register at least one non-null route: "
+            "Repository protocol handler must register non-null routes: "
+                + handler.getClass().getName());
+      }
+      if (routes.isEmpty() && !handler.allowsEmptyRoutes()) {
+        throw new IllegalStateException(
+            "Repository protocol handler must register at least one route: "
                 + handler.getClass().getName());
       }
       return List.copyOf(routes);

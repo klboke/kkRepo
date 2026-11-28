@@ -77,7 +77,7 @@ import com.github.klboke.kkrepo.server.raw.RawGroupService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import com.github.klboke.kkrepo.server.r.RService;
-import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.LegacyRepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
@@ -122,14 +122,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
  * owning modules.
  */
 @Component
-public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandler {
+public class BuiltinRepositoryProtocolHandler implements LegacyRepositoryProtocolHandler {
   private DownloadOffload downloadOffload;
 
   @org.springframework.beans.factory.annotation.Autowired
   public void setDownloadOffload(DownloadOffload downloadOffload) {
     this.downloadOffload = downloadOffload;
   }
-
   private static final List<RepositoryProtocolRoute> ROUTES =
       Arrays.stream(RepositoryFormat.values())
           .flatMap(format -> Arrays.stream(RepositoryType.values())
@@ -383,6 +382,11 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   @Override
   public Collection<RepositoryProtocolRoute> routes() {
     return ROUTES;
+  }
+
+  @Override
+  public boolean compatibilityFallback() {
+    return true;
   }
 
   @Override

@@ -48,6 +48,19 @@ class GitLfsAccessTest {
     var download = batch("download");
     assertTrue(access.authorize(download, new MockHttpServletResponse(), repository, GitLfsProtocol.BATCH_PATH));
     assertInstanceOf(GitLfsProtocol.Batch.class, download.getAttribute(GitLfsAccess.BATCH_ATTRIBUTE));
+    // The consumed Batch body is replayed, unchanged, to the protocol handler.
+    assertArrayEquals(download.getContentAsByteArray(),
+        GitLfsAccess.authorizedRequest(download).getInputStream().readAllBytes());
+    var replay = GitLfsAccess.authorizedRequest(download);
+    assertEquals(download.getContentAsByteArray().length, replay.getContentLength());
+    assertEquals(download.getContentAsByteArray().length, replay.getContentLengthLong());
+    assertEquals(new String(download.getContentAsByteArray(), StandardCharsets.UTF_8),
+        replay.getReader().readLine());
+    assertThrows(UnsupportedOperationException.class,
+        () -> replay.getInputStream().setReadListener(null));
+    var caller = access.caller(download);
+    assertTrue(caller.anonymous());
+    assertEquals(download.getRemoteAddr(), caller.clientAddress());
     var upload = batch("upload");
     upload.getSession().setAttribute(AuthenticatedSubject.SESSION_ATTRIBUTE, subject());
     var response = new MockHttpServletResponse();
@@ -87,11 +100,12 @@ class GitLfsAccessTest {
   }
   @Test void uploadReauthorizationRejectsExpiredAndChangedIdentities() {
     var request = batch("upload");
+    var caller = new GitLfsCaller(subject(), false, "203.0.113.7", () -> access.authenticate(request));
     assertEquals(401, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
-        () -> access.requireUpload(request, "lfs", "a".repeat(64), "old-owner")).status());
+        () -> access.requireUpload(caller, "lfs", "a".repeat(64), "old-owner")).status());
     when(authentication.authenticateFresh(any())).thenReturn(Optional.of(subject()));
     assertEquals(403, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
-        () -> access.requireUpload(request, "lfs", "a".repeat(64), "old-owner")).status());
+        () -> access.requireUpload(caller, "lfs", "a".repeat(64), "old-owner")).status());
     assertEquals(401, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
         () -> GitLfsAccess.subject(request)).status());
     verifyNoInteractions(permissions);

@@ -182,7 +182,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       if (gitLfsAccess == null) {
         response.sendError(503, "Git LFS authentication unavailable");
       } else if (gitLfsAccess.authorize(request, response, repository.get(), target.path())) {
-        filterChain.doFilter(request, response);
+        filterChain.doFilter(
+            com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess.authorizedRequest(request), response);
       }
       return;
     }

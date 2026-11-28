@@ -1,8 +1,5 @@
 package com.github.klboke.kkrepo.server.gitlfs;
 
-import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
-import com.github.klboke.kkrepo.server.security.ClientAddress;
-
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.core.*;
 import com.github.klboke.kkrepo.persistence.jdbc.api.*;
@@ -12,9 +9,10 @@ import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsProtocol;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsBatchResult;
+import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsBatchResult.ObjectResult;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import jakarta.annotation.PreDestroy;
-import jakarta.servlet.http.HttpServletRequest;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -27,15 +25,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/**
+ * Hosted Git LFS state: upload leases and quotas, verified blob writes, publication transactions,
+ * audit identity and deletion. Protocol parsing and HTTP rendering belong to the Git LFS plugin;
+ * this service only takes neutral, already parsed values.
+ */
 @Service
 public class GitLfsHostedService {
+  /** Lifetime of a Batch upload action, matching the lease issued by {@link GitLfsDao#create}. */
+  static final long UPLOAD_ACTION_SECONDS = 900;
   private final AssetDao assets;
   private final ComponentDao components;
   private final BrowseNodeDao browse;
   private final GitLfsDao uploads;
   private final BlobStorageRegistry storages;
   private final GitLfsAccess access;
-  private final ForwardedHeaderPolicy forwarded;
   private final TransactionTemplate transactions;
   // Execution resources only; all ownership, expiry and publication truth is in the database.
   private final Semaphore slots;
@@ -44,7 +48,7 @@ public class GitLfsHostedService {
 
   public GitLfsHostedService(AssetDao assets, ComponentDao components, BrowseNodeDao browse,
       GitLfsDao uploads, BlobStorageRegistry storages, GitLfsAccess access,
-      ForwardedHeaderPolicy forwarded, PlatformTransactionManager transactionManager,
+      PlatformTransactionManager transactionManager,
       @Value("${kkrepo.gitlfs.concurrent-uploads:4}") int concurrentUploads) {
     if (concurrentUploads < 1) throw new IllegalArgumentException("Git LFS upload concurrency must be positive");
     this.assets = assets;
@@ -53,82 +57,92 @@ public class GitLfsHostedService {
     this.uploads = uploads;
     this.storages = storages;
     this.access = access;
-    this.forwarded = forwarded;
     this.transactions = new TransactionTemplate(transactionManager);
     this.slots = new Semaphore(concurrentUploads);
   }
 
   @PreDestroy void close() { heartbeat.shutdownNow(); }
 
-  public Map<String, Object> batch(RepositoryRuntime repository, GitLfsProtocol.Batch batch,
-      HttpServletRequest request) {
-    var subject = GitLfsAccess.subject(request);
-    String base = forwarded.serverBaseUrl(request) + request.getContextPath()
-        + RepositoryUrlPrefix.path(request) + repository.name() + "/";
+  /**
+   * Decides each Batch object for {@code caller}: per-object permission, write policy, stored size,
+   * upload lease or download availability. Repeated OIDs share the decision of their first valid
+   * occurrence, so one lease is issued per object.
+   *
+   * @param objectBaseUrl public repository URL, ending with {@code /}, for the object actions
+   */
+  public GitLfsBatchResult batch(RepositoryRuntime repository, GitLfsProtocol.Batch batch,
+      GitLfsCaller caller, String objectBaseUrl) {
+    var subject = caller.subject();
     List<String> oids = batch.objects().stream().filter(GitLfsProtocol.ObjectRequest::valid)
         .map(GitLfsProtocol.ObjectRequest::oid).distinct().toList();
     Set<String> allowed = access.allowedObjects(subject, repository.name(), oids,
         batch.upload() ? PermissionAction.ADD : PermissionAction.READ);
     Map<String, AssetRecord> existing = assets.findAssetsByPaths(repository.id(), oids);
-    List<Map<String, Object>> results = new ArrayList<>();
-    Map<String, Map<String, Object>> repeated = new HashMap<>();
+    List<ObjectResult> results = new ArrayList<>();
+    Map<String, ObjectResult> repeated = new HashMap<>();
     for (var object : batch.objects()) {
-      Map<String, Object> item = new LinkedHashMap<>();
-      item.put("oid", object.oid());
-      item.put("size", object.size());
-      results.add(item);
-      if (!object.valid()) { error(item, 422, object.error()); continue; }
-      if (!allowed.contains(object.oid())) {
-        error(item, 403, "Permission denied"); continue;
-      }
-      if (batch.upload() && "DENY".equalsIgnoreCase(repository.writePolicy())) {
-        error(item, 403, "Repository is read only"); continue;
-      }
-      Map<String, Object> earlier = repeated.get(object.oid());
-      if (earlier != null) {
-        if (!earlier.get("size").equals(object.size())) error(item, 422, "Conflicting object sizes");
-        else item.putAll(earlier);
-        continue;
-      }
-      repeated.put(object.oid(), item);
-      AssetRecord asset = existing.get(object.oid());
-      if (asset != null && !Objects.equals(asset.size(), object.size())) {
-        error(item, 422, "Object size does not match stored content"); continue;
-      }
-      if (batch.upload()) {
-        if (asset != null) continue;
-        var upload = createUpload(repository, object.oid(), object.size(), GitLfsAccess.subjectKey(subject));
-        item.put("actions", Map.of(
-            "upload", Map.of("href", base + object.oid(), "header", Map.of("X-KkRepo-Lfs-Upload", upload.id()), "expires_in", 900),
-            "verify", Map.of("href", base + object.oid() + "/verify", "expires_in", 900)));
-      } else {
-        if (asset == null) { error(item, 404, "Object does not exist on the server"); continue; }
-        item.put("actions", Map.of("download", Map.of("href", base + object.oid())));
-      }
-      // No Authorization is reflected into action JSON. Clients obtain credentials for this origin.
-      item.put("authenticated", false);
+      results.add(decide(repository, batch, object, allowed, existing, repeated, subject));
     }
-    if (Boolean.TRUE.equals(request.getAttribute(GitLfsAccess.ANONYMOUS_ATTRIBUTE))
-        && !results.isEmpty() && results.stream().allMatch(item -> item.get("error") instanceof Map<?, ?> error
-            && Integer.valueOf(403).equals(error.get("code")))) {
+    if (caller.anonymous() && !results.isEmpty()
+        && results.stream().allMatch(result -> result.isError() && result.errorCode() == 403)) {
       throw new GitLfsException(401, "Authentication required");
     }
-    return Map.of("transfer", "basic", "objects", results);
+    return new GitLfsBatchResult(objectBaseUrl, results);
   }
 
-  public void put(RepositoryRuntime repository, String oid, HttpServletRequest request) throws IOException {
-    String id = request.getHeader("X-KkRepo-Lfs-Upload");
+  private ObjectResult decide(RepositoryRuntime repository, GitLfsProtocol.Batch batch,
+      GitLfsProtocol.ObjectRequest object, Set<String> allowed, Map<String, AssetRecord> existing,
+      Map<String, ObjectResult> repeated, AuthenticatedSubject subject) {
+    String oid = object.oid();
+    long size = object.size();
+    if (!object.valid()) return ObjectResult.error(oid, size, 422, object.error());
+    if (!allowed.contains(oid)) return ObjectResult.error(oid, size, 403, "Permission denied");
+    if (batch.upload() && "DENY".equalsIgnoreCase(repository.writePolicy())) {
+      return ObjectResult.error(oid, size, 403, "Repository is read only");
+    }
+    ObjectResult earlier = repeated.get(oid);
+    if (earlier != null) {
+      return earlier.size() == size ? earlier : ObjectResult.error(oid, size, 422, "Conflicting object sizes");
+    }
+    ObjectResult result;
+    AssetRecord asset = existing.get(oid);
+    if (asset != null && !Objects.equals(asset.size(), size)) {
+      result = ObjectResult.error(oid, size, 422, "Object size does not match stored content");
+    } else if (batch.upload()) {
+      result = asset != null
+          ? ObjectResult.present(oid, size)
+          : ObjectResult.upload(oid, size,
+              createUpload(repository, oid, size, GitLfsAccess.subjectKey(subject)).id(), UPLOAD_ACTION_SECONDS);
+    } else {
+      result = asset == null
+          ? ObjectResult.error(oid, size, 404, "Object does not exist on the server")
+          : ObjectResult.download(oid, size);
+    }
+    repeated.put(oid, result);
+    return result;
+  }
+
+  /**
+   * Streams the bytes of an upload action. The lease owner and permission are checked again before
+   * and after the transfer; size and SHA-256 are verified while streaming.
+   *
+   * @param uploadId value of the upload action header, or {@code null}
+   * @param contentLength declared request length, or {@code -1} when unknown
+   */
+  public void put(RepositoryRuntime repository, String oid, String uploadId, long contentLength,
+      InputStream body, GitLfsCaller caller) throws IOException {
+    String id = uploadId;
     if (id == null || !id.matches("[0-9a-f-]{36}")) throw new GitLfsException(422, "Obtain an upload action through Batch first");
     var initial = uploads.find(id).orElseThrow(() -> new GitLfsException(410, "Upload action expired"));
-    String owner = GitLfsAccess.subjectKey(GitLfsAccess.subject(request));
+    String owner = GitLfsAccess.subjectKey(caller.subject());
     if (initial.repositoryId() != repository.id() || !initial.oid().equals(oid) || !initial.subjectKey().equals(owner)) {
       throw new GitLfsException(403, "Upload action does not belong to this request");
     }
-    access.requireUpload(request, repository.name(), oid, owner);
+    access.requireUpload(caller, repository.name(), oid, owner);
     if ("DENY".equalsIgnoreCase(repository.writePolicy())) {
       throw new GitLfsException(403, "Repository is read only");
     }
-    if (request.getContentLengthLong() >= 0 && request.getContentLengthLong() != initial.size()) {
+    if (contentLength >= 0 && contentLength != initial.size()) {
       throw new GitLfsException(422, "Content-Length does not match Batch size");
     }
     if (!slots.tryAcquire()) throw new GitLfsException(429, "Upload capacity exhausted; retry later");
@@ -137,16 +151,15 @@ public class GitLfsHostedService {
       BlobReference target = storage.prepareVerifiedUpload(repository.name(), oid, initial.size());
       // Safe replay after a lost success response: validate bytes, never replace an immutable asset.
       if ("PUBLISHED".equals(initial.state()) && assets.findAssetByPath(repository.id(), oid).isPresent()) {
-        VerifiedBlobReader reader = new VerifiedBlobReader(target, request.getInputStream());
+        VerifiedBlobReader reader = new VerifiedBlobReader(target, body);
         while (reader.nextPart().length > 0) { }
         reader.finish();
         return;
       }
       var upload = uploads.claim(id, owner, BlobReferenceCodec.format(target), target.objectKey())
           .orElseThrow(() -> new GitLfsException(409, "Upload action is stale or another upload is active; repeat Batch"));
-      transfer(repository, upload, target, storage, request.getInputStream(),
-          GitLfsAccess.subject(request).userId(), ClientAddress.from(request),
-          () -> access.requireUpload(request, repository.name(), oid, owner));
+      transfer(repository, upload, target, storage, body, caller.subject().userId(), caller.clientAddress(),
+          () -> access.requireUpload(caller, repository.name(), oid, owner));
     } catch (BlobIntegrityException invalid) {
       throw new GitLfsException(422, invalid.getMessage());
     } finally {
@@ -252,13 +265,12 @@ public class GitLfsHostedService {
     return true;
   }
 
-  public Map<String, Object> verify(RepositoryRuntime repository, String oid, HttpServletRequest request) throws IOException {
-    GitLfsAccess.requireJson(request.getContentType());
-    var object = GitLfsProtocol.parseVerify(request.getInputStream(), access.maxObjectBytes());
-    if (!oid.equals(object.oid())) throw new GitLfsException(422, "OID does not match verify URL");
+  /** Confirms that {@code oid} is published with {@code size} bytes. */
+  public void verify(RepositoryRuntime repository, String oid, long size) {
     AssetRecord asset = asset(repository.id(), oid);
-    if (!Objects.equals(asset.size(), object.size())) throw new GitLfsException(422, "Object size does not match stored content");
-    return Map.of("oid", oid, "size", object.size());
+    if (!Objects.equals(asset.size(), size)) {
+      throw new GitLfsException(422, "Object size does not match stored content");
+    }
   }
 
   /** Management deletion unlinks metadata; FK tombstones fence old uploads and generic GC owns bytes. */
@@ -286,7 +298,4 @@ public class GitLfsHostedService {
     return assets.findBlobById(asset.assetBlobId()).orElseThrow(() -> new GitLfsException(404, "Object content is unavailable"));
   }
 
-  private static void error(Map<String, Object> item, int code, String message) {
-    item.put("error", Map.of("code", code, "message", message));
-  }
 }
