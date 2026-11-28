@@ -235,3 +235,28 @@
   .offload-verify-header { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .offload-verify-result:not(:empty) { margin-top: 8px; }
 }
+
+/* OHPM imports */
+#ohpm-import-form { margin-top: 16px; }
+#ohpm-import-form [hidden] { display: none; }
+.ohpm-import-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.ohpm-import-source { margin: 16px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; }
+.ohpm-import-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ohpm-import-source .ohpm-import-line, .ohpm-import-jobs > .ohpm-import-line { margin: 6px 0; }
+.ohpm-import-jobs { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+#ohpm-import-jobs {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+.ohpm-import-jobs .field-label, .ohpm-import-source .field-label { font-weight: 600; }
+.ohpm-import-report-head { justify-content: space-between; margin: 16px 0 8px; }
+#ohpm-import-form .create-button:disabled { opacity: .5; cursor: default; }
+#ohpm-import-status:not(:empty) { margin-top: 8px; }
+@media (max-width: 640px) { .ohpm-import-grid { grid-template-columns: minmax(0, 1fr); } }
