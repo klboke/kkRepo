@@ -16,9 +16,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -81,6 +83,11 @@ class RRepositoryBlackBoxCompatibilityTest {
       assertPackageHttp(config.nexus(repository), path, fixture.bytes());
       assertPackageHttp(config.candidate(repository), path, fixture.bytes());
       assertBrowseAndSearch(config, repository, fixture);
+      assertPublishedIndexVisible(config, repository, "src/contrib");
+      assertEquals(204, send(config.candidate(repository).request(path).DELETE()).status());
+      assertTrue(browseEntries(config.candidateAdmin(), repository, "src").valueStream()
+          .anyMatch(entry -> "src/contrib".equals(entry.path("path").asText())));
+      assertPublishedIndexVisible(config, repository, "src/contrib");
     } finally {
       deleteAsset(config.candidate(repository), path);
       deleteRepository(config.nexusAdmin(), repository);
@@ -104,7 +111,8 @@ class RRepositoryBlackBoxCompatibilityTest {
         RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".zip"));
     packages.put("bin/macosx/big-sur-arm64/contrib/4.5",
         RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".tgz"));
-    packages.put("bin/linux/noble-x86_64/4.5/src/contrib",
+    String linuxRoot = "bin/linux/resolute-x86_64/4.6";
+    packages.put(linuxRoot + "/src/contrib",
         RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".tar.gz"));
     try {
       createNexusHosted(config, repository);
@@ -123,7 +131,11 @@ class RRepositoryBlackBoxCompatibilityTest {
           assertEquals(200, head.status());
           assertEquals(Integer.toString(fixture.bytes().length), head.header("Content-Length"));
         }
+        assertPublishedIndexVisible(config, repository, namespace);
       }
+      JsonNode linuxEntries = browseEntries(config.candidateAdmin(), repository, linuxRoot);
+      assertTrue(linuxEntries.valueStream().anyMatch(entry -> entry.path("name").asText().equals("src")));
+      assertFalse(linuxEntries.valueStream().anyMatch(entry -> entry.path("name").asText().startsWith("PACKAGES")));
       for (var entry : packages.entrySet()) {
         var fixture = entry.getValue();
         assertArrayEquals(fixture.bytes(), get(config.candidate(repository),
@@ -265,11 +277,54 @@ class RRepositoryBlackBoxCompatibilityTest {
     assertTrue(leaf, "R package must be a Browse leaf under src/contrib/package/version");
   }
 
+  private static void assertPublishedIndexVisible(Config config, String repository, String namespace)
+      throws Exception {
+    String index = namespace + "/PACKAGES.gz";
+    String download = "/repository/" + repository + "/" + index;
+    String htmlDirectory = "/service/rest/repository/browse/" + repository + "/" + namespace + "/";
+    for (AdminEndpoint endpoint : List.of(config.nexusAdmin(), config.candidateAdmin())) {
+      waitForBrowse(endpoint, htmlDirectory, download);
+    }
+
+    AdminEndpoint candidate = config.candidateAdmin();
+    String browse = "/internal/browse/" + repository;
+    JsonNode entry = browseEntries(candidate, repository, namespace).valueStream()
+        .filter(item -> index.equals(item.path("path").asText())).findFirst().orElseThrow();
+    assertTrue(entry.path("leaf").asBoolean());
+    assertTrue(entry.path("readOnly").asBoolean());
+    assertEquals(download, entry.path("downloadUrl").asText());
+
+    Exchange file = get(config.candidate(repository), index);
+    assertEquals(200, file.status());
+    Exchange attributes = send(candidate.request(browse + "/attributes?path=" + encode(index)).GET());
+    assertEquals(200, attributes.status());
+    JsonNode detail = JSON.readTree(attributes.body());
+    assertEquals(download, detail.path("downloadUrl").asText());
+    assertEquals(file.body().length, detail.path("size").asLong());
+    assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(file.body())),
+        detail.path("checksum").path("sha256").asText());
+    assertFalse(attributes.text().contains(".r/snapshots/"));
+
+    assertEquals(405, send(candidate.request(browse + "?path=" + encode(index)).DELETE()).status());
+    assertArrayEquals(file.body(), get(config.candidate(repository), index).body());
+  }
+
+  private static JsonNode browseEntries(AdminEndpoint candidate, String repository, String path)
+      throws Exception {
+    Exchange response = send(candidate.request("/internal/browse/" + repository + "?path=" + encode(path)).GET());
+    assertEquals(200, response.status());
+    return JSON.readTree(response.body()).path("entries");
+  }
+
   private static Exchange waitForBrowse(AdminEndpoint endpoint, String path) throws Exception {
+    return waitForBrowse(endpoint, path, "");
+  }
+
+  private static Exchange waitForBrowse(AdminEndpoint endpoint, String path, String expected) throws Exception {
     Exchange last = null;
     for (int attempt = 0; attempt < 120; attempt++) {
       last = send(endpoint.request(path).GET());
-      if (last.status() == 200) return last;
+      if (last.status() == 200 && last.text().contains(expected)) return last;
       Thread.sleep(250L);
     }
     throw new AssertionError("R Browse projection did not become readable: "

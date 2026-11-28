@@ -121,7 +121,7 @@
 .snippet .x-tag { color: #905; }
 .snippet .x-attr { color: #07a; }
 
-.download-row { margin-top: 4px; }
+.download-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 
 /* --- kkRepo visual system: consumes the selected shared CSS theme --- */
 

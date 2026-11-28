@@ -11,6 +11,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.browse.BrowseAssetVisibility;
+import com.github.klboke.kkrepo.server.browse.BrowseController.BrowseEntry;
+import com.github.klboke.kkrepo.server.browse.RHostedBrowseIndexes;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.util.HtmlUtils;
 import org.springframework.stereotype.Service;
 
@@ -37,6 +40,12 @@ public class MavenHtmlListingService {
   private final BrowseNodeDao browseNodeDao;
   private final AssetDao assetDao;
   private final ComponentDao componentDao;
+  private RHostedBrowseIndexes rIndexes;
+
+  @Autowired
+  void setRHostedBrowseIndexes(RHostedBrowseIndexes rIndexes) {
+    this.rIndexes = rIndexes;
+  }
 
   public MavenHtmlListingService(
       RepositoryDao repositoryDao,
@@ -86,10 +95,17 @@ public class MavenHtmlListingService {
         merged.putIfAbsent(child.path(), child);
       }
     }
-    if (!listingPath.storagePath().isEmpty() && merged.isEmpty()) {
+    List<BrowseEntry> indexes = browseMode && rIndexes != null
+        ? rIndexes.children(repo, normalized, merged::containsKey) : List.of();
+    if (!listingPath.storagePath().isEmpty() && merged.isEmpty() && indexes.isEmpty()) {
       return Optional.empty();
     }
     List<ListingEntry> entries = toListingEntries(repo, listingPath, sources, merged);
+    for (BrowseEntry entry : indexes) {
+      entries.add(entry.leaf()
+          ? new ListingEntry(entry.name(), entry.downloadUrl(), true, entry.size(), entry.lastUpdatedAt())
+          : ListingEntry.directory(entry.name()));
+    }
     entries.sort((a, b) -> {
       if (a.leaf() != b.leaf()) return a.leaf() ? 1 : -1;
       return a.displayName().compareTo(b.displayName());

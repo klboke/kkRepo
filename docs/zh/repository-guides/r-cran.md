@@ -79,6 +79,9 @@ gzip/tar 结构和有界 `DESCRIPTION` metadata 做校验；package name/version
 `PACKAGES.gz`，并原子切换 current snapshot。读请求只会看到旧的完整 snapshot 或新的完整
 snapshot，不会看到半份索引。
 
+在 hosted 仓库的 Browse 或 HTML View 中打开包目录，即可看到已发布的 `PACKAGES.gz`。
+在 Browse 中选择该文件，可以查看大小和校验和、复制地址或下载。索引为只读，随包变更自动更新。
+
 ## 发布二进制包
 
 | 包类型 | 目录示例 | 扩展名 |

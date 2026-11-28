@@ -61,6 +61,36 @@ import org.springframework.web.server.ResponseStatusException;
 class BrowseAssetDetailServiceTest {
 
   @Test
+  void hostedRIndexDetailsFollowThePublishedPointerWithoutExposingTheSnapshotPath() {
+    RepositoryRecord repository = repository(80L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String namespace = "src/contrib";
+    String path = namespace + "/PACKAGES.gz";
+    String hidden = ".r/snapshots/hash/7/PACKAGES.gz";
+    AssetRecord asset = new AssetRecord(81L, repository.id(), null, 83L, RepositoryFormat.R,
+        hidden, PersistenceHashes.pathHash(hidden), "PACKAGES.gz", "r-index", "application/x-gzip",
+        41L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), hidden), asset), Map.of(83L, blob(83L, 41L)));
+    var service = new BrowseAssetDetailService(new StubRepositoryDao(), assets, null, new ObjectMapper());
+    RRegistryDao registry = mock(RRegistryDao.class);
+    service.setRRegistryDao(registry);
+
+    assertEquals(HttpStatus.NOT_FOUND, assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, path, null)).getStatusCode());
+    when(registry.findPublishedSnapshot(repository.id(), namespace)).thenReturn(Optional.of(
+        new RRegistryDao.Snapshot(repository.id(), namespace, 7, 1, Map.of(path, hidden), "sha", Instant.EPOCH)));
+    var detail = service.detail(repository, path, repository.name());
+    assertEquals(path, detail.path());
+    assertEquals("/repository/cran-hosted/" + path, detail.downloadUrl());
+    assertEquals(41L, detail.size());
+    assertEquals(Map.of("namespace", namespace, "generated", true), detail.r());
+    assertEquals(HttpStatus.NOT_FOUND, assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, hidden, null)).getStatusCode());
+    assertEquals(HttpStatus.NOT_FOUND, assertThrows(ResponseStatusException.class,
+        () -> service.detail(repository, path, "other-hosted")).getStatusCode());
+  }
+
+  @Test
   void rDetailExposesDurablePackageIdentityAndControlFields() {
     RepositoryRecord repository = repository(
         80L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
