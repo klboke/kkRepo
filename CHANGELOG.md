@@ -4,6 +4,33 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.5.2 - 2026-11-28
+
+### Security
+
+- Fix a reported authorization issue in which unauthenticated requests could read, upload, or delete artifacts in a private Maven hosted repository with anonymous access disabled. We recommend that all installations upgrade.
+
+### Added
+
+- Use a CLI user token for Docker login and other HTTP Basic clients. API keys and bearer tokens now apply the current role mappings for external users. (#549)
+- Group scan findings by package or artifact, hide findings covered by waivers, and waive a package version across findings. (#571)
+
+### Fixed
+
+- Keep S3 and OSS clients usable when callers request different configurations for the same blob store. (#573)
+- Keep newly generated Admin API keys available to copy, and show published R hosted indexes in Browse. (#576, #584)
+- Use the OrientDB bucket/name index for the first page of a Nexus repository-data export, avoiding an initial full-bucket sort. (#581)
+
+### Changed
+
+- Reorganize Admin and Browse by feature and update their shared components, navigation, forms, and feedback. (#579, #580)
+- Simplify the repository capability matrices, reorganize the English and Chinese READMEs, and add a Turkish README. Document Nexus REST API alignment and the plugin architecture decision. (#470, #509, #577, #578, #582, #583)
+- Update the AWS SDK BOM, Maven artifact library, and GraalVM Native Build Tools. (#563, #565, #566)
+
+### Upgrade Notes
+
+- When upgrading from 1.5.1, MySQL and PostgreSQL apply Flyway V72 for Docker and Conan bearer-token credential tracking. Back up the database before upgrading and retain the configured credential encryption secret.
+
 ## 1.5.1 - 2026-11-23
 
 ### Added
